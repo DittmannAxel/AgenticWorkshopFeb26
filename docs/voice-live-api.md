@@ -41,9 +41,10 @@ This document covers both approaches. The SDK is simpler; the raw WebSocket give
 ```python
 from azure.ai.voicelive.aio import connect
 from azure.ai.voicelive.models import (
-    AzureStandardVoice, InputAudioFormat, Modality,
-    OutputAudioFormat, RequestSession, ServerEventType, ServerVad,
-    AudioNoiseReduction,
+    AudioEchoCancellation, AudioNoiseReduction,
+    AzureSemanticVad, AzureStandardVoice,
+    InputAudioFormat, Modality,
+    OutputAudioFormat, RequestSession, ServerEventType,
 )
 from azure.identity.aio import DefaultAzureCredential
 
@@ -53,11 +54,14 @@ async with connect(endpoint=endpoint, credential=credential, model="gpt-4.1") as
     # Configure the session
     await connection.session.update(session=RequestSession(
         modalities=[Modality.TEXT, Modality.AUDIO],
-        voice=AzureStandardVoice(name="de-DE-ConradNeural"),
+        voice=AzureStandardVoice(name="de-DE-ConradNeural", temperature=0.8),
         input_audio_format=InputAudioFormat.PCM16,
         output_audio_format=OutputAudioFormat.PCM16,
-        turn_detection=ServerVad(threshold=0.5, silence_duration_ms=500),
+        turn_detection=AzureSemanticVad(
+            threshold=0.5, prefix_padding_ms=300, silence_duration_ms=500,
+        ),
         input_audio_noise_reduction=AudioNoiseReduction(type="azure_deep_noise_suppression"),
+        input_audio_echo_cancellation=AudioEchoCancellation(),
     ))
 
     # Send audio
@@ -180,7 +184,8 @@ session_config = {
 | `voice.temperature` | `0.8` | Controls expressiveness (valid range: 0.6-1.2). Higher = more expressive, lower = more neutral. Default: 0.8. |
 | `input_audio_format` | `pcm16` | Raw 16-bit signed integer PCM. No compression overhead, ideal for low-latency streaming. |
 | `input_audio_sampling_rate` | `24000` | 24 kHz is the recommended rate for Voice Live. |
-| `turn_detection.type` | `azure_semantic_vad` | Semantic VAD understands language structure and does not mistake brief pauses for turn endings. |
+| `turn_detection.type` | `azure_semantic_vad` | Semantic VAD understands language structure and does not mistake brief pauses for turn endings. In the SDK, use `AzureSemanticVad` (not `ServerVad`, which maps to `server_vad`). Other variants: `AzureSemanticVadEn` (English-optimised), `AzureSemanticVadMultilingual`. |
+| `turn_detection.prefix_padding_ms` | `300` | Milliseconds of audio to keep before the detected speech start. Ensures the beginning of speech is not clipped. |
 | `turn_detection.silence_duration_ms` | `500` | How long the speaker must be silent before the system considers the turn complete. |
 | `input_audio_noise_reduction.type` | `azure_deep_noise_suppression` | Deep-learning-based noise cancellation. Especially useful in call-centre and mobile scenarios. |
 

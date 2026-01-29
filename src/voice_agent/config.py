@@ -32,6 +32,7 @@ class VoiceLiveConfig:
     input_audio_sampling_rate: int = 24000
     vad_type: str = "azure_semantic_vad"
     vad_threshold: float = 0.5
+    prefix_padding_ms: int = 300
     silence_duration_ms: int = 500
     noise_reduction_type: str = "azure_deep_noise_suppression"
     voice_temperature: float = 0.8  # Valid range: 0.6-1.2 per API docs
@@ -51,6 +52,7 @@ class VoiceLiveConfig:
             "turn_detection": {
                 "type": self.vad_type,
                 "threshold": self.vad_threshold,
+                "prefix_padding_ms": self.prefix_padding_ms,
                 "silence_duration_ms": self.silence_duration_ms,
             },
             "input_audio_noise_reduction": {

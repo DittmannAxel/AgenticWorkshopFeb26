@@ -18,6 +18,7 @@ class TestVoiceLiveConfig:
         assert config.input_audio_sampling_rate == 24000
         assert config.vad_type == "azure_semantic_vad"
         assert config.vad_threshold == 0.5
+        assert config.prefix_padding_ms == 300
         assert config.silence_duration_ms == 500
         assert config.noise_reduction_type == "azure_deep_noise_suppression"
 
@@ -31,6 +32,7 @@ class TestVoiceLiveConfig:
         assert session["voice"]["temperature"] == 0.8  # default per API docs
         assert session["input_audio_format"] == "pcm16"
         assert session["turn_detection"]["type"] == "azure_semantic_vad"
+        assert session["turn_detection"]["prefix_padding_ms"] == 300
         assert session["input_audio_noise_reduction"]["type"] == "azure_deep_noise_suppression"
 
     def test_custom_values(self):

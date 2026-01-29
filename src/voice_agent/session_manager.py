@@ -141,6 +141,17 @@ class SessionManager:
             return
         await self._voice_client.send_audio(audio_bytes)
 
+    async def send_text(self, text: str) -> None:
+        """Send a text message directly to Voice Live (bypasses STT).
+
+        Useful for testing and demos where you want to simulate
+        voice input without an actual microphone.
+        """
+        if self._state != SessionState.ACTIVE:
+            logger.warning("Cannot send text in state %s", self._state)
+            return
+        await self._voice_client.send_text(text)
+
     # -- Voice Live Event Handlers -----------------------------------------
 
     async def _on_session_created(self, event: dict) -> None:

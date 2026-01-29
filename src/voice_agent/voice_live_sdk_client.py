@@ -15,18 +15,19 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from azure.ai.voicelive.aio import connect
 from azure.ai.voicelive.models import (
+    AudioEchoCancellation,
     AudioNoiseReduction,
+    AzureSemanticVad,
     AzureStandardVoice,
     InputAudioFormat,
     Modality,
     OutputAudioFormat,
     RequestSession,
     ServerEventType,
-    ServerVad,
 )
 from azure.identity.aio import DefaultAzureCredential
 
@@ -62,6 +63,7 @@ class VoiceLiveSDKClient:
     def __init__(self, config: VoiceAgentConfig) -> None:
         self._config = config
         self._connection = None
+        self._ctx_manager = None
         self._credential = DefaultAzureCredential()
 
     async def connect(self) -> None:
@@ -76,13 +78,18 @@ class VoiceLiveSDKClient:
 
         logger.info("Connecting to Voice Live via SDK (endpoint=%s, model=%s)", endpoint, model)
 
-        self._connection = await connect(
+        # Store the context manager so we can properly __aexit__ later
+        self._ctx_manager = connect(
             endpoint=endpoint,
             credential=self._credential,
             model=model,
-        ).__aenter__()
+        )
+        self._connection = await self._ctx_manager.__aenter__()
 
-        # Configure the session with voice, VAD, and noise suppression
+        # Configure the session with voice, VAD, noise suppression, and echo cancellation.
+        # AzureSemanticVad is the recommended VAD for conversational agents --
+        # it understands language structure and avoids cutting off mid-sentence pauses.
+        # Docs: https://learn.microsoft.com/en-us/azure/ai-services/speech-service/voice-live-how-to
         voice_cfg = self._config.voice
         session_config = RequestSession(
             modalities=[Modality.TEXT, Modality.AUDIO],
@@ -92,13 +99,15 @@ class VoiceLiveSDKClient:
             ),
             input_audio_format=InputAudioFormat.PCM16,
             output_audio_format=OutputAudioFormat.PCM16,
-            turn_detection=ServerVad(
+            turn_detection=AzureSemanticVad(
                 threshold=voice_cfg.vad_threshold,
+                prefix_padding_ms=voice_cfg.prefix_padding_ms,
                 silence_duration_ms=voice_cfg.silence_duration_ms,
             ),
             input_audio_noise_reduction=AudioNoiseReduction(
                 type=voice_cfg.noise_reduction_type,
             ),
+            input_audio_echo_cancellation=AudioEchoCancellation(),
         )
 
         await self._connection.session.update(session=session_config)
@@ -106,9 +115,10 @@ class VoiceLiveSDKClient:
 
     async def disconnect(self) -> None:
         """Close the Voice Live connection."""
-        if self._connection:
-            await self._connection.__aexit__(None, None, None)
+        if self._ctx_manager:
+            await self._ctx_manager.__aexit__(None, None, None)
             self._connection = None
+            self._ctx_manager = None
         await self._credential.close()
         logger.info("Disconnected from Voice Live")
 
@@ -132,6 +142,17 @@ class VoiceLiveSDKClient:
         """Trigger a response from the agent (e.g., for a proactive greeting)."""
         assert self._connection is not None, "Not connected"
         await self._connection.response.create()
+
+    async def cancel_response(self) -> None:
+        """Cancel the current response (e.g., on barge-in when the user starts speaking)."""
+        assert self._connection is not None, "Not connected"
+        try:
+            await self._connection.response.cancel()
+        except Exception as e:
+            if "no active response" in str(e).lower():
+                logger.debug("Cancel ignored -- no active response")
+            else:
+                raise
 
     async def events(self) -> AsyncIterator:
         """Iterate over server events from Voice Live.

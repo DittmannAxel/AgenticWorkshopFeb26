@@ -246,7 +246,7 @@ def create_ticket(
 To register these functions as agent tools, use `FunctionTool` and `ToolSet`:
 
 ```python
-from azure.ai.agents import FunctionTool, ToolSet
+from azure.ai.agents.models import FunctionTool, ToolSet
 
 # Collect all tool functions in a list
 user_functions = [
@@ -310,11 +310,14 @@ run = client.runs.create_and_process(
     agent_id=agent.id,
 )
 
-# Retrieve the agent's response
-messages = client.messages.list(thread_id=thread.id)
+# Retrieve the agent's response.
+# Note: The SDK uses MessageRole.AGENT (not "assistant").
+from azure.ai.agents.models import MessageRole, ListSortOrder
+
+messages = client.messages.list(thread_id=thread.id, order=ListSortOrder.ASCENDING)
 for msg in messages:
-    if msg.role == "assistant":
-        print(msg.content)
+    if msg.role == MessageRole.AGENT and msg.text_messages:
+        print(msg.text_messages[-1].text.value)
 ```
 
 ### Example Output (German)
@@ -338,6 +341,8 @@ When combining the Agent Service with Voice Live, the Voice Live API handles aud
 4. The agent's text response is sent back to **Voice Live** for TTS synthesis.
 
 ```python
+from azure.ai.agents.models import MessageRole, ListSortOrder
+
 async def handle_voice_turn(
     transcribed_text: str,
     client: AgentsClient,
@@ -351,7 +356,7 @@ async def handle_voice_turn(
     # Add the transcribed speech as a user message
     client.messages.create(
         thread_id=thread_id,
-        role="user",
+        role=MessageRole.USER,
         content=transcribed_text,
     )
 
@@ -361,11 +366,18 @@ async def handle_voice_turn(
         agent_id=agent_id,
     )
 
-    # Extract the latest assistant message
-    messages = client.messages.list(thread_id=thread_id)
-    for msg in reversed(list(messages)):
-        if msg.role == "assistant":
-            return msg.content
+    if run.status == "failed":
+        return "Entschuldigung, es ist ein Fehler aufgetreten."
+
+    # Extract the latest agent message.
+    # Note: The SDK uses MessageRole.AGENT (not "assistant").
+    messages = client.messages.list(
+        thread_id=thread_id,
+        order=ListSortOrder.DESCENDING,
+    )
+    for msg in messages:
+        if msg.role == MessageRole.AGENT and msg.text_messages:
+            return msg.text_messages[-1].text.value
 
     return "Entschuldigung, ich konnte Ihre Anfrage leider nicht verarbeiten."
 ```

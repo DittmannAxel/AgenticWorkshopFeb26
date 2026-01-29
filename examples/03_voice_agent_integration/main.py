@@ -44,7 +44,7 @@ async def simulate_audio_input(session: SessionManager) -> None:
 
     # For demo: send text directly (bypasses STT)
     # This simulates what happens after Voice Live transcribes audio
-    await session._voice_client.send_text(
+    await session.send_text(
         "Hallo, ich möchte meinen Bestellstatus abfragen. Meine Kundennummer ist C-1001."
     )
 
