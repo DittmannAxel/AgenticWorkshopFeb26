@@ -1,0 +1,54 @@
+flowchart TB
+    subgraph Customer["Customer"]
+        Phone["Phone (PSTN)"]
+        WebRTC["WebRTC Client"]
+    end
+
+    Phone -->|"Audio Stream"| VoiceLive
+    WebRTC -->|"Audio Stream (WebSocket)"| VoiceLive
+
+    subgraph AzureAI["Azure AI Foundry"]
+        subgraph VoiceLive["Voice Live API"]
+            STT["Speech-to-Text"]
+            TTS["Text-to-Speech"]
+            VAD["Voice Activity Detection"]
+            Noise["Noise Suppression"]
+        end
+
+        subgraph FoundryAgent["Foundry Agent Service"]
+            Agent["Agent Orchestrator"]
+            Tools["Tool Definitions"]
+            LLM["LLM (GPT-4.1)"]
+        end
+    end
+
+    VoiceLive -->|"Transcribed Text"| Agent
+    Agent -->|"Response Text"| VoiceLive
+    Agent <-->|"Reasoning / Generation"| LLM
+    Agent -->|"Tool Calls"| Tools
+
+    subgraph Backends["Backend Systems"]
+        CRM["CRM System"]
+        Calendar["Calendar Service"]
+        Orders["Order Management"]
+        Tickets["Ticket System"]
+    end
+
+    Tools -->|"Query / Command"| CRM
+    Tools -->|"Query / Command"| Calendar
+    Tools -->|"Query / Command"| Orders
+    Tools -->|"Query / Command"| Tickets
+
+    CRM -->|"Data Response"| Tools
+    Calendar -->|"Data Response"| Tools
+    Orders -->|"Data Response"| Tools
+    Tickets -->|"Data Response"| Tools
+
+    VoiceLive -->|"Audio Response"| Phone
+    VoiceLive -->|"Audio Response (WebSocket)"| WebRTC
+
+    style Customer fill:#e0f2fe,stroke:#0284c7,color:#000
+    style AzureAI fill:#f0fdf4,stroke:#16a34a,color:#000
+    style VoiceLive fill:#dcfce7,stroke:#22c55e,color:#000
+    style FoundryAgent fill:#dcfce7,stroke:#22c55e,color:#000
+    style Backends fill:#fef3c7,stroke:#f59e0b,color:#000

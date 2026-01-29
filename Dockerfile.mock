@@ -1,0 +1,63 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir aiohttp
+
+COPY <<'SCRIPT' /app/mock_service.py
+"""Minimal mock backend service for local development.
+
+Returns sample data for CRM, Calendar, Orders, and Tickets endpoints.
+"""
+
+import json
+import os
+from aiohttp import web
+
+SERVICE_NAME = os.getenv("SERVICE_NAME", "generic")
+SERVICE_PORT = int(os.getenv("SERVICE_PORT", "8080"))
+
+MOCK_DATA = {
+    "crm": {
+        "customers": [
+            {"id": "C-1001", "name": "Maria Schmidt", "phone": "+49 170 1234567", "tier": "premium"},
+            {"id": "C-1002", "name": "Thomas Müller", "phone": "+49 171 9876543", "tier": "standard"},
+        ]
+    },
+    "calendar": {
+        "slots": [
+            {"time": "09:00", "duration": "30min", "available": True},
+            {"time": "10:00", "duration": "30min", "available": True},
+            {"time": "14:00", "duration": "30min", "available": True},
+        ]
+    },
+    "orders": {
+        "orders": [
+            {"id": "ORD-5001", "customer_id": "C-1001", "status": "in_transit", "items": ["Laptop Stand"]},
+            {"id": "ORD-5002", "customer_id": "C-1001", "status": "delivered", "items": ["Wireless Mouse"]},
+        ]
+    },
+    "tickets": {
+        "last_ticket_id": 7000,
+    },
+}
+
+
+async def health(request):
+    return web.json_response({"status": "ok", "service": SERVICE_NAME})
+
+
+async def handle_request(request):
+    return web.json_response(MOCK_DATA.get(SERVICE_NAME, {"error": "unknown service"}))
+
+
+app = web.Application()
+app.router.add_get("/health", health)
+app.router.add_get("/{path:.*}", handle_request)
+app.router.add_post("/{path:.*}", handle_request)
+
+if __name__ == "__main__":
+    web.run_app(app, port=SERVICE_PORT)
+SCRIPT
+
+CMD ["python", "/app/mock_service.py"]

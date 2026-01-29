@@ -1,0 +1,44 @@
+sequenceDiagram
+    participant Customer
+    participant VoiceLive as Voice Live API
+    participant Agent as Foundry Agent
+    participant Tools
+    participant Backend
+
+    Note over Customer,Backend: Connection Phase
+
+    Customer->>VoiceLive: Connect via WebSocket
+    VoiceLive-->>Customer: session.created
+    Customer->>VoiceLive: session.update (configure agent, tools, voice)
+    VoiceLive-->>Customer: session.updated
+
+    Note over Customer,Backend: Audio Input Phase
+
+    Customer->>VoiceLive: input_audio_buffer.append (audio.delta)
+    VoiceLive->>VoiceLive: Noise Suppression
+    VoiceLive->>VoiceLive: Voice Activity Detection
+    VoiceLive->>VoiceLive: Speech-to-Text
+    VoiceLive->>Agent: conversation.item.created (user transcript)
+
+    Note over Customer,Backend: Agent Processing Phase
+
+    Agent->>Agent: Intent Classification
+    Agent->>Agent: Determine required tool
+    Agent->>Tools: tool_call (order_tool.get_recent_orders)
+    Tools->>Backend: Query order database
+    Backend-->>Tools: Order data response
+    Tools-->>Agent: tool_result (order details)
+
+    Note over Customer,Backend: Response Generation Phase
+
+    Agent->>Agent: Formulate response text
+    Agent->>VoiceLive: response.text.delta (response text)
+    VoiceLive->>VoiceLive: Text-to-Speech
+    VoiceLive->>Customer: response.audio.delta (audio chunks)
+    VoiceLive->>Customer: response.audio.done
+    VoiceLive->>Customer: response.done
+
+    Note over Customer,Backend: Conversation continues or ends
+
+    Customer->>VoiceLive: session.close
+    VoiceLive-->>Customer: session.closed

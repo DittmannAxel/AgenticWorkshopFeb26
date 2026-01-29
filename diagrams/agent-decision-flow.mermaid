@@ -1,0 +1,72 @@
+flowchart TD
+    Start(["Receive Customer Input"]) --> STT["Speech-to-Text Transcription"]
+    STT --> Classify["Intent Classification (LLM)"]
+    Classify --> Decision{"What is the intent?"}
+
+    Decision -->|"Appointment"| ApptBranch["Appointment Handling"]
+    Decision -->|"Order Status"| OrderBranch["Order Status Inquiry"]
+    Decision -->|"Complaint"| ComplaintBranch["Complaint Handling"]
+    Decision -->|"General Info"| GeneralBranch["General Information"]
+    Decision -->|"Unclear / Unrecognized"| Fallback["Fallback Path"]
+
+    subgraph ApptFlow["Appointment Flow"]
+        ApptBranch --> CalTool["calendar_tool.check_availability"]
+        CalTool --> CalResult{"Slots Available?"}
+        CalResult -->|"Yes"| BookAppt["calendar_tool.book_appointment"]
+        BookAppt --> ApptConfirm["Confirm Appointment Details"]
+        CalResult -->|"No"| Suggest["Suggest Alternative Times"]
+        Suggest --> CalTool
+    end
+
+    subgraph OrderFlow["Order Status Flow"]
+        OrderBranch --> CRMTool["crm_tool.get_customer"]
+        CRMTool --> OrderTool["order_tool.get_recent_orders"]
+        OrderTool --> OrderResult{"Order Found?"}
+        OrderResult -->|"Yes"| OrderDetails["Present Order Status"]
+        OrderResult -->|"No"| OrderNotFound["Inform: No Order Found"]
+    end
+
+    subgraph ComplaintFlow["Complaint Flow"]
+        ComplaintBranch --> TicketTool["ticket_tool.create_ticket"]
+        TicketTool --> TicketCreated["Ticket Created"]
+        TicketCreated --> Escalate{"Severity High?"}
+        Escalate -->|"Yes"| EscalateAgent["ticket_tool.escalate_to_human"]
+        Escalate -->|"No"| AckTicket["Acknowledge and Provide Ticket Number"]
+    end
+
+    subgraph GeneralFlow["General Info Flow"]
+        GeneralBranch --> LLMResponse["Generate LLM Response Directly"]
+    end
+
+    subgraph FallbackFlow["Fallback Flow"]
+        Fallback --> Clarify["Ask Clarifying Question"]
+        Clarify --> RetryInput(["Wait for Customer Response"])
+        RetryInput --> Classify
+    end
+
+    ApptConfirm --> Generate
+    OrderDetails --> Generate
+    OrderNotFound --> Generate
+    EscalateAgent --> Generate
+    AckTicket --> Generate
+    LLMResponse --> Generate
+
+    Generate["Generate Voice Response"] --> TTS["Text-to-Speech"]
+    TTS --> SendAudio(["Send Audio to Customer"])
+
+    SendAudio --> ErrorCheck{"Error Occurred?"}
+    ErrorCheck -->|"Yes"| ErrorHandle["Log Error and Apologize"]
+    ErrorHandle --> Generate
+    ErrorCheck -->|"No"| End(["End / Await Next Input"])
+
+    style Start fill:#dbeafe,stroke:#3b82f6,color:#000
+    style SendAudio fill:#dbeafe,stroke:#3b82f6,color:#000
+    style End fill:#d1fae5,stroke:#10b981,color:#000
+    style Decision fill:#fef9c3,stroke:#eab308,color:#000
+    style Fallback fill:#fee2e2,stroke:#ef4444,color:#000
+    style ErrorHandle fill:#fee2e2,stroke:#ef4444,color:#000
+    style ApptFlow fill:#f0fdf4,stroke:#22c55e,color:#000
+    style OrderFlow fill:#eff6ff,stroke:#3b82f6,color:#000
+    style ComplaintFlow fill:#fefce8,stroke:#eab308,color:#000
+    style GeneralFlow fill:#f5f3ff,stroke:#8b5cf6,color:#000
+    style FallbackFlow fill:#fef2f2,stroke:#ef4444,color:#000
