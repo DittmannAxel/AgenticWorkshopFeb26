@@ -141,6 +141,17 @@ AgenticWorkshopFeb26/
 │   ├── requirements.txt                # Python dependencies
 │   └── README.md                       # Setup and architecture documentation
 │
+├── voiceAgentAgentic/                  # Workshop: Local Tools → Agent SDK
+│   ├── .env.example                    # Shared environment config
+│   ├── requirements.txt                # Shared dependencies
+│   ├── README.md                       # Workshop overview and comparison
+│   ├── 01_local_tools/                 # Step 1: Voice Live + local tool execution
+│   │   ├── main.py
+│   │   └── README.md
+│   └── 02_agent_tools/                 # Step 2: Voice Live + Agent SDK
+│       ├── main.py
+│       └── README.md
+│
 ├── diagrams/                           # Architecture and flow diagrams
 │
 ├── docs/                               # Additional documentation
@@ -273,6 +284,33 @@ python main.py
 | **Full documentation** | [`AIFoundryVoiceAgent/README.md`](AIFoundryVoiceAgent/README.md) |
 | **Architecture diagram** | Mermaid sequence diagram in the [AIFoundryVoiceAgent README](AIFoundryVoiceAgent/README.md#architecture) |
 | **Configuration** | All settings via `.env` file -- see [`.env.example`](AIFoundryVoiceAgent/.env.example) |
+
+---
+
+## Voice Agent Workshop: Local Tools vs Agent SDK
+
+A two-step workshop that teaches the progression from **local tool execution** to the **Azure AI Agent SDK**:
+
+| Step | What It Does | Folder |
+|---|---|---|
+| **Step 1: Local Tools** | VoiceLive model decides tool calls, your code executes them locally | [`voiceAgentAgentic/01_local_tools/`](voiceAgentAgentic/01_local_tools/) |
+| **Step 2: Agent SDK** | VoiceLive handles audio only, Agent SDK handles reasoning + tools | [`voiceAgentAgentic/02_agent_tools/`](voiceAgentAgentic/02_agent_tools/) |
+
+Both steps use the same 8 customer service tools from `src/tools/`. Step 2 adds the Azure AI Agent Service for better reasoning, persistent conversation threads, and centralized tool management.
+
+```bash
+cd voiceAgentAgentic
+cp .env.example .env   # fill in your Azure credentials
+pip install -r requirements.txt
+
+# Run Step 1 (Voice Live + local tools)
+python 01_local_tools/main.py
+
+# Run Step 2 (Voice Live + Agent SDK)
+python 02_agent_tools/main.py
+```
+
+See the [voiceAgentAgentic README](voiceAgentAgentic/README.md) for full architecture diagrams and comparison.
 
 ---
 
