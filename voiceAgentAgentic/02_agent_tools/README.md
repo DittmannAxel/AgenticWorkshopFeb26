@@ -66,7 +66,7 @@ session_config = RequestSession(
 session_config = RequestSession(
     # tools=...                     # <-- REMOVED
     # tool_choice=...               # <-- REMOVED
-    input_audio_transcription=AudioInputTranscriptionOptions(model="whisper-1"),
+    input_audio_transcription=AudioInputTranscriptionOptions(model="azure-speech"),
     ...
 )
 ```

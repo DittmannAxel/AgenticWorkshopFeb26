@@ -217,12 +217,17 @@ AZURE_FOUNDRY_ENDPOINT=https://<your-resource>.services.ai.azure.com
 # Project name (from portal > your project)
 PROJECT_NAME=<your-project-name>
 
-# Model deployment name (from portal > Model Catalog > deploy a model)
+# Agent model deployment name (from portal > Model Catalog > deploy a model)
 MODEL_DEPLOYMENT_NAME=gpt-4.1
 
+# Voice Live realtime model deployment (for audio I/O)
+AZURE_VOICELIVE_MODEL=gpt-realtime
+
 # TTS voice (optional, default: de-DE-ConradNeural)
-VOICE_LIVE_VOICE=de-DE-ConradNeural
+AZURE_VOICELIVE_VOICE=de-DE-ConradNeural
 ```
+
+Voice Live uses a **realtime model deployment** (audio I/O), while the Agent Service uses its own **LLM deployment** (reasoning + tools).
 
 > **Authentication:** The application uses `DefaultAzureCredential`. Run `az login` locally. In production, use Managed Identity. See the [setup guide](docs/setup-guide.md) for details.
 

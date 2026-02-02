@@ -78,7 +78,7 @@ flowchart TB
 The [Voice Live API](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/voice-live) provides the real-time speech processing layer. It exposes a WebSocket endpoint that the client connects to for bidirectional audio streaming:
 
 ```
-wss://<resource>.services.ai.azure.com/voice-live/realtime?api-version=2025-10-01
+wss://<resource>.services.ai.azure.com/voice-live/realtime?api-version=2025-10-01&model=<AZURE_VOICELIVE_MODEL>
 ```
 
 It bundles four capabilities into a single connection:

@@ -41,7 +41,7 @@ class VoiceLiveClient:
         config = VoiceAgentConfig()
         client = VoiceLiveClient(config)
 
-        client.on("conversation.item.input_audio.transcription.completed", handle_transcript)
+        client.on("conversation.item.input_audio_transcription.completed", handle_transcript)
         client.on("response.audio.delta", handle_audio_output)
 
         async with client:
@@ -140,7 +140,7 @@ class VoiceLiveClient:
 
         Common events:
         - session.created
-        - conversation.item.input_audio.transcription.completed
+        - conversation.item.input_audio_transcription.completed
         - response.audio.delta
         - response.done
         - error
@@ -183,11 +183,11 @@ class VoiceLiveClient:
     def _auth_headers(self) -> dict[str, str]:
         """Build authentication headers for the WebSocket handshake.
 
-        Uses API key if AZURE_API_KEY is set, otherwise falls back
+        Uses API key if AZURE_VOICELIVE_API_KEY is set, otherwise falls back
         to DefaultAzureCredential bearer token.
         """
         import os
-        api_key = os.getenv("AZURE_API_KEY")
+        api_key = os.getenv("AZURE_VOICELIVE_API_KEY") or os.getenv("AZURE_API_KEY")
         if api_key:
             return {"api-key": api_key}
 

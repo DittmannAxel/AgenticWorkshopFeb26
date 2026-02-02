@@ -22,10 +22,22 @@ class VoiceLiveConfig:
     """
 
     voice_name: str = field(
-        default_factory=lambda: os.getenv("VOICE_LIVE_VOICE", "de-DE-ConradNeural")
+        default_factory=lambda: (
+            os.getenv("AZURE_VOICELIVE_VOICE")
+            or os.getenv("VOICE_LIVE_VOICE", "de-DE-ConradNeural")
+        )
     )
     api_version: str = field(
-        default_factory=lambda: os.getenv("VOICE_LIVE_API_VERSION", "2025-10-01")
+        default_factory=lambda: (
+            os.getenv("AZURE_VOICELIVE_API_VERSION")
+            or os.getenv("VOICE_LIVE_API_VERSION", "2025-10-01")
+        )
+    )
+    transcription_model: str = field(
+        default_factory=lambda: (
+            os.getenv("AZURE_VOICELIVE_TRANSCRIPTION_MODEL")
+            or os.getenv("VOICE_LIVE_TRANSCRIPTION_MODEL", "azure-speech")
+        )
     )
     input_audio_format: str = "pcm16"
     output_audio_format: str = "pcm16"
@@ -45,6 +57,9 @@ class VoiceLiveConfig:
                 "type": "azure-standard",
                 "name": self.voice_name,
                 "temperature": self.voice_temperature,
+            },
+            "input_audio_transcription": {
+                "model": self.transcription_model,
             },
             "input_audio_format": self.input_audio_format,
             "output_audio_format": self.output_audio_format,
@@ -72,13 +87,23 @@ class VoiceAgentConfig:
 
     # Azure AI Foundry endpoint
     endpoint: str = field(
-        default_factory=lambda: os.environ["AZURE_FOUNDRY_ENDPOINT"]
+        default_factory=lambda: (
+            os.getenv("AZURE_FOUNDRY_ENDPOINT")
+            or os.getenv("AZURE_VOICELIVE_ENDPOINT")
+            or os.environ["AZURE_FOUNDRY_ENDPOINT"]
+        )
     )
     project_name: str = field(
         default_factory=lambda: os.environ["PROJECT_NAME"]
     )
     model_deployment: str = field(
         default_factory=lambda: os.getenv("MODEL_DEPLOYMENT_NAME", "gpt-4.1")
+    )
+    voice_live_model: str = field(
+        default_factory=lambda: (
+            os.getenv("AZURE_VOICELIVE_MODEL")
+            or os.getenv("VOICE_LIVE_MODEL", "gpt-realtime")
+        )
     )
 
     # Voice Live sub-config
@@ -103,13 +128,13 @@ class VoiceAgentConfig:
         """Voice Live WebSocket URL (direct model mode).
 
         Format: wss://<resource>.services.ai.azure.com/voice-live/realtime
-                ?api-version=2025-10-01&model=<deployment>
+                ?api-version=2025-10-01&model=<voice-live-model>
         Docs: https://learn.microsoft.com/en-us/azure/ai-services/speech-service/voice-live-quickstart
         """
         return (
             f"wss://{self._host}/voice-live/realtime"
             f"?api-version={self.voice.api_version}"
-            f"&model={self.model_deployment}"
+            f"&model={self.voice_live_model}"
         )
 
     @property

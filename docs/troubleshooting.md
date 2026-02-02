@@ -102,7 +102,7 @@ print(f"Token expires at: {token.expires_on}")
 - Incorrect resource name in the endpoint URL.
 
 **Solutions:**
-- Verify the endpoint URL format: `wss://<resource>.services.ai.azure.com/voice-live/realtime?api-version=2025-10-01`
+- Verify the endpoint URL format: `wss://<resource>.services.ai.azure.com/voice-live/realtime?api-version=2025-10-01&model=<AZURE_VOICELIVE_MODEL>`
 - Test basic connectivity:
   ```bash
   # Check DNS resolution

@@ -350,7 +350,7 @@ Antworte immer auf Deutsch. Sei freundlich und natuerlich."""
             ),
             tools=tools,
             tool_choice=ToolChoiceLiteral.AUTO,
-            input_audio_transcription=AudioInputTranscriptionOptions(model="whisper-1"),
+            input_audio_transcription=AudioInputTranscriptionOptions(model="azure-speech"),
         )
 
         await self.connection.session.update(session=session_config)

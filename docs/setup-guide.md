@@ -61,9 +61,14 @@ You will also need the **project name** visible in the AI Foundry portal.
 
 ---
 
-## Step 3: Deploy a Model
+## Step 3: Deploy Models (Agent + Voice Live)
 
-Inside the AI Foundry portal, go to **Model Catalog** and deploy a model such as `gpt-4.1`. Note the **deployment name** -- you will use it in the `.env` file.
+Inside the AI Foundry portal, go to **Model Catalog** and deploy:
+
+- **Agent model** (e.g., `gpt-4.1`) for the Foundry Agent Service.
+- **Voice Live realtime model** (e.g., `gpt-realtime` or `gpt-4o-realtime-preview`) for audio I/O.
+
+Note both deployment names -- you will use them in the `.env` file.
 
 ---
 
@@ -74,7 +79,7 @@ Voice Live is part of the Speech Service linked to your AI Foundry resource. Ens
 No additional configuration is needed beyond the AI Foundry resource -- the Voice Live WebSocket endpoint is derived from the same base URL:
 
 ```
-wss://<resource-name>.services.ai.azure.com/voice-live/realtime?api-version=2025-10-01
+wss://<resource-name>.services.ai.azure.com/voice-live/realtime?api-version=2025-10-01&model=<AZURE_VOICELIVE_MODEL>
 ```
 
 > **Reference:** [Voice Live API Quickstart](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/voice-live-quickstart)
@@ -138,20 +143,23 @@ AZURE_FOUNDRY_ENDPOINT=https://<resource-name>.services.ai.azure.com
 # Your project name from the AI Foundry portal (required)
 PROJECT_NAME=<project>
 
-# The model deployment name from Step 3 (required)
+# Agent model deployment name from Step 3 (required)
 MODEL_DEPLOYMENT_NAME=gpt-4.1
+
+# Voice Live realtime model deployment (required for audio I/O)
+AZURE_VOICELIVE_MODEL=gpt-realtime
 
 # The neural voice for TTS output (optional, default: de-DE-ConradNeural)
 # Browse all voices: https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=tts
-VOICE_LIVE_VOICE=de-DE-ConradNeural
+AZURE_VOICELIVE_VOICE=de-DE-ConradNeural
 
 # Voice Live API version (optional, default: 2025-10-01)
-VOICE_LIVE_API_VERSION=2025-10-01
+AZURE_VOICELIVE_API_VERSION=2025-10-01
 
 # Authentication: DefaultAzureCredential is used by default.
 # It picks up Azure CLI credentials locally and Managed Identity in production.
 # Uncomment the next line ONLY if you need API key auth instead:
-# AZURE_API_KEY=<your-api-key>
+# AZURE_VOICELIVE_API_KEY=<your-api-key>
 
 # Logging verbosity (optional, default: INFO)
 LOG_LEVEL=INFO
@@ -160,7 +168,7 @@ LOG_LEVEL=INFO
 > **Important:** Never commit `.env` to source control. It is already listed in `.gitignore`.
 >
 > **Note:** The Voice Live WebSocket URL is derived automatically from `AZURE_FOUNDRY_ENDPOINT`:
-> `wss://<resource>.services.ai.azure.com/voice-live/realtime?api-version=2025-10-01&model=<MODEL_DEPLOYMENT_NAME>`
+> `wss://<resource>.services.ai.azure.com/voice-live/realtime?api-version=2025-10-01&model=<AZURE_VOICELIVE_MODEL>`
 
 ---
 

@@ -84,10 +84,10 @@ async with connect(endpoint=endpoint, credential=credential, model="gpt-4.1") as
 The Voice Live endpoint follows this pattern:
 
 ```
-wss://<resource>.services.ai.azure.com/voice-live/realtime?api-version=2025-10-01&model=<deployment>
+wss://<resource>.services.ai.azure.com/voice-live/realtime?api-version=2025-10-01&model=<model>
 ```
 
-Replace `<resource>` with the name of your Azure AI Foundry resource and `<deployment>` with your model deployment name (e.g., `gpt-4.1`).
+Replace `<resource>` with the name of your Azure AI Foundry resource and `<model>` with your Voice Live realtime model deployment (e.g., `gpt-realtime` or `gpt-4o-realtime-preview`).
 
 ### Authentication
 
@@ -102,7 +102,7 @@ import json
 import websockets
 from azure.identity import DefaultAzureCredential
 
-async def connect_to_voice_live(resource_name: str) -> websockets.WebSocketClientProtocol:
+async def connect_to_voice_live(resource_name: str, model: str) -> websockets.WebSocketClientProtocol:
     """
     Open an authenticated WebSocket connection to the Voice Live API.
     Uses DefaultAzureCredential, which picks up Azure CLI tokens locally
@@ -115,7 +115,7 @@ async def connect_to_voice_live(resource_name: str) -> websockets.WebSocketClien
     # Build the WebSocket URL
     url = (
         f"wss://{resource_name}.services.ai.azure.com"
-        f"/voice-live/realtime?api-version=2025-10-01"
+        f"/voice-live/realtime?api-version=2025-10-01&model={model}"
     )
 
     # Connect with the Authorization header
@@ -152,6 +152,11 @@ session_config = {
             "temperature": 0.8                # Controls expressiveness (0.6-1.2)
         },
 
+        # Input transcription (STT) via Azure Speech
+        "input_audio_transcription": {
+            "model": "azure-speech"
+        },
+
         # Audio format for microphone input and speaker output
         "input_audio_format": "pcm16",        # 16-bit PCM, little-endian
         "output_audio_format": "pcm16",       # Same format for playback
@@ -182,6 +187,7 @@ session_config = {
 | `modalities` | `["text", "audio"]` | Receive both transcribed text and synthesised audio. Use `["audio"]` if you only need audio output. |
 | `voice.name` | `de-DE-ConradNeural` | Azure Neural Voice identifier. Use the [voice gallery](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=tts) to find other voices. |
 | `voice.temperature` | `0.8` | Controls expressiveness (valid range: 0.6-1.2). Higher = more expressive, lower = more neutral. Default: 0.8. |
+| `input_audio_transcription.model` | `azure-speech` | Enables transcription of input audio using Azure Speech. |
 | `input_audio_format` | `pcm16` | Raw 16-bit signed integer PCM. No compression overhead, ideal for low-latency streaming. |
 | `input_audio_sampling_rate` | `24000` | 24 kHz is the recommended rate for Voice Live. |
 | `turn_detection.type` | `azure_semantic_vad` | Semantic VAD understands language structure and does not mistake brief pauses for turn endings. In the SDK, use `AzureSemanticVad` (not `ServerVad`, which maps to `server_vad`). Other variants: `AzureSemanticVadEn` (English-optimised), `AzureSemanticVadMultilingual`. |
@@ -203,6 +209,7 @@ Communication over the WebSocket is event-driven. Both the client and the server
 | `session.updated` | After processing a `session.update` | Confirmed configuration |
 | `input_audio_buffer.speech_started` | VAD detects the speaker started talking | Timestamp |
 | `input_audio_buffer.speech_stopped` | VAD detects the speaker stopped talking | Timestamp, duration |
+| `conversation.item.input_audio_transcription.completed` | Speech-to-text transcript for a user turn | Transcript text, item metadata |
 | `conversation.item.created` | A new conversation item (user or assistant turn) is created | Item ID, role, content |
 | `response.text.delta` | Incremental text from the agent's response | Text fragment |
 | `response.audio.delta` | Incremental synthesised audio from TTS | Base64-encoded PCM16 chunk |

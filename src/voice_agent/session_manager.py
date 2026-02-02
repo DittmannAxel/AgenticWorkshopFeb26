@@ -109,7 +109,7 @@ class SessionManager:
 
         # Register event handlers for Voice Live events
         self._voice_client.on(
-            "conversation.item.input_audio.transcription.completed",
+            "conversation.item.input_audio_transcription.completed",
             self._on_transcription_completed,
         )
         self._voice_client.on("session.created", self._on_session_created)

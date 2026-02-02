@@ -67,7 +67,7 @@ async def main() -> None:
 
     # Register event handlers
     client.on("session.created", on_session_created)
-    client.on("conversation.item.input_audio.transcription.completed", on_transcription_completed)
+    client.on("conversation.item.input_audio_transcription.completed", on_transcription_completed)
     client.on("response.audio.delta", on_audio_delta)
     client.on("error", on_error)
 

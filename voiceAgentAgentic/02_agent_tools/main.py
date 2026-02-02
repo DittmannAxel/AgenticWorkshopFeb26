@@ -496,7 +496,7 @@ WICHTIG:
             ),
             # Transcription is critical: this is how we get the user's text
             # to send to the Agent SDK
-            input_audio_transcription=AudioInputTranscriptionOptions(model="whisper-1"),
+            input_audio_transcription=AudioInputTranscriptionOptions(model="azure-speech"),
         )
 
         await self.connection.session.update(session=session_config)

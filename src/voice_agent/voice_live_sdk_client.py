@@ -21,6 +21,7 @@ from azure.ai.voicelive.aio import connect
 from azure.ai.voicelive.models import (
     AudioEchoCancellation,
     AudioNoiseReduction,
+    AudioInputTranscriptionOptions,
     AzureSemanticVad,
     AzureStandardVoice,
     InputAudioFormat,
@@ -74,7 +75,7 @@ class VoiceLiveSDKClient:
         - Session creation and the initial handshake
         """
         endpoint = self._config.endpoint
-        model = self._config.model_deployment
+        model = self._config.voice_live_model
 
         logger.info("Connecting to Voice Live via SDK (endpoint=%s, model=%s)", endpoint, model)
 
@@ -96,6 +97,9 @@ class VoiceLiveSDKClient:
             voice=AzureStandardVoice(
                 name=voice_cfg.voice_name,
                 temperature=voice_cfg.voice_temperature,
+            ),
+            input_audio_transcription=AudioInputTranscriptionOptions(
+                model=voice_cfg.transcription_model
             ),
             input_audio_format=InputAudioFormat.PCM16,
             output_audio_format=OutputAudioFormat.PCM16,
