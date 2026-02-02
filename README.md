@@ -135,6 +135,12 @@ AgenticWorkshopFeb26/
 ├── README.md                           # This file
 ├── requirements.txt                    # Python dependencies
 │
+├── AIFoundryVoiceAgent/                # Standalone async voice assistant example
+│   ├── main.py                         # Executable voice agent with background queries
+│   ├── .env.example                    # Environment variable template
+│   ├── requirements.txt                # Python dependencies
+│   └── README.md                       # Setup and architecture documentation
+│
 ├── diagrams/                           # Architecture and flow diagrams
 │
 ├── docs/                               # Additional documentation
@@ -226,6 +232,19 @@ python examples/03_voice_agent_integration/main.py
 # Example 4: Interactive customer service demo
 python examples/04_customer_service_demo/main.py
 ```
+
+#### Standalone Voice Example: Async Agent with Background Queries
+
+A standalone voice assistant that demonstrates an **async tool call pattern** -- the assistant acknowledges requests immediately, runs queries in the background, and interrupts with results once ready:
+
+```bash
+cd AIFoundryVoiceAgent
+cp .env.example .env   # fill in your Azure credentials
+pip install -r requirements.txt
+python main.py
+```
+
+See the [AIFoundryVoiceAgent README](AIFoundryVoiceAgent/README.md) for full setup instructions and architecture details.
 
 ### 5. Run with Docker (Optional)
 

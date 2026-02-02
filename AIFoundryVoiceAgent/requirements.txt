@@ -1,0 +1,10 @@
+# Azure AI SDKs
+azure-ai-voicelive[aiohttp]>=1.0.0
+azure-identity>=1.15.0
+azure-core>=1.30.0
+
+# Audio (for local microphone)
+pyaudio>=0.2.14
+
+# Utilities
+python-dotenv>=1.0.0

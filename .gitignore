@@ -26,6 +26,10 @@ share/python-wheels/
 *.egg
 MANIFEST
 agents.md
+agents2.md
+
+# Log directories
+logs/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
