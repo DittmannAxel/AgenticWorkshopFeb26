@@ -254,6 +254,28 @@ docker-compose up --build
 
 ---
 
+## Standalone Voice Example: AIFoundryVoiceAgent
+
+A self-contained, runnable voice assistant that demonstrates an **async tool call pattern** using the Azure Voice Live API. While the examples in `examples/` build concepts progressively, this standalone project is ready to run on its own.
+
+**What it does:** The assistant acknowledges tool requests immediately ("I'm looking that up..."), runs queries in the background, continues natural smalltalk, and then interrupts to deliver results once the background task completes.
+
+```bash
+cd AIFoundryVoiceAgent
+cp .env.example .env   # fill in your Azure credentials
+pip install -r requirements.txt
+python main.py
+```
+
+| | |
+|---|---|
+| **Code** | [`AIFoundryVoiceAgent/main.py`](AIFoundryVoiceAgent/main.py) |
+| **Full documentation** | [`AIFoundryVoiceAgent/README.md`](AIFoundryVoiceAgent/README.md) |
+| **Architecture diagram** | Mermaid sequence diagram in the [AIFoundryVoiceAgent README](AIFoundryVoiceAgent/README.md#architecture) |
+| **Configuration** | All settings via `.env` file -- see [`.env.example`](AIFoundryVoiceAgent/.env.example) |
+
+---
+
 ## Example Scenarios
 
 The following scenarios demonstrate typical customer service interactions handled by the voice agent. All example dialogues are in German to reflect the primary demo language.
