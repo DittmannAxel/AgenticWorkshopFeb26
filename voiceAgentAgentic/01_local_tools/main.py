@@ -355,6 +355,7 @@ Halte Antworten kurz und klar -- sie werden als Sprache vorgelesen."""
         self._active_response = False
         self._response_api_done = False
         self._pending_response_request = False
+        self._resume_after_barge_in = False
 
         self._pending_function_call: Optional[Dict[str, Any]] = None
         self.pending_queries: Dict[str, PendingQuery] = {}
@@ -454,6 +455,8 @@ Halte Antworten kurz und klar -- sie werden als Sprache vorgelesen."""
             ap.skip_pending_audio()
 
             if self._active_response and not self._response_api_done:
+                logger.info("Barge-in detected, canceling active response")
+                self._resume_after_barge_in = True
                 try:
                     await conn.response.cancel()
                 except Exception:
@@ -523,6 +526,19 @@ Halte Antworten kurz und klar -- sie werden als Sprache vorgelesen."""
 
         elif event.type == ServerEventType.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED:
             logger.info("Transcription: %s", event.transcript)
+            # If the user actually said something new, don't replay the old answer.
+            if event.transcript.strip():
+                self._resume_after_barge_in = False
+
+            if self._resume_after_barge_in and not event.transcript.strip():
+                logger.info("Empty transcript after barge-in, requesting response replay")
+                self._resume_after_barge_in = False
+                if not self._active_response:
+                    await conn.response.create()
+                else:
+                    self._pending_response_request = True
+                return
+
             if not self._active_response:
                 logger.info("Transcription completed, requesting response")
                 await conn.response.create()
