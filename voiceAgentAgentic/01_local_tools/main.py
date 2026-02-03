@@ -80,12 +80,21 @@ if not os.path.exists("logs"):
     os.makedirs("logs")
 
 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+log_format = "%(asctime)s:%(name)s:%(levelname)s:%(message)s"
+
 logging.basicConfig(
     filename=f"logs/{timestamp}_local_tools.log",
     filemode="w",
-    format="%(asctime)s:%(name)s:%(levelname)s:%(message)s",
-    level=logging.INFO,
+    format=log_format,
+    level=log_level,
 )
+
+# Also log to console for faster debugging
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(logging.Formatter(log_format))
+console_handler.setLevel(log_level)
+logging.getLogger().addHandler(console_handler)
 logger = logging.getLogger(__name__)
 
 
@@ -197,6 +206,7 @@ class AudioProcessor:
         self.output_stream: Optional[pyaudio.Stream] = None
 
     def start_capture(self):
+        logger.info("Starting microphone capture (rate=%s, chunk=%s)", self.rate, self.chunk_size)
         def _capture_callback(in_data, _frame_count, _time_info, _status_flags):
             audio_base64 = base64.b64encode(in_data).decode("utf-8")
             asyncio.run_coroutine_threadsafe(
@@ -218,6 +228,7 @@ class AudioProcessor:
         )
 
     def start_playback(self):
+        logger.info("Starting audio playback")
         if self.output_stream:
             return
         remaining = bytes()
@@ -428,6 +439,7 @@ Halte Antworten kurz und klar -- sie werden als Sprache vorgelesen."""
 
     async def _handle_event(self, event):
         """Event handler with function call support."""
+        logger.debug("Event received: %s", event.type)
         ap = self.audio_processor
         conn = self.connection
 
@@ -448,6 +460,10 @@ Halte Antworten kurz und klar -- sie werden als Sprache vorgelesen."""
 
         elif event.type == ServerEventType.INPUT_AUDIO_BUFFER_SPEECH_STOPPED:
             print("[Processing...]")
+            # Trigger a response if none is active
+            if not self._active_response:
+                logger.info("Speech stopped, requesting response")
+                await conn.response.create()
 
         elif event.type == ServerEventType.RESPONSE_CREATED:
             self._active_response = True
@@ -458,6 +474,16 @@ Halte Antworten kurz und klar -- sie werden als Sprache vorgelesen."""
 
         elif event.type == ServerEventType.RESPONSE_AUDIO_DONE:
             print("[Ready...]")
+
+        elif event.type == ServerEventType.RESPONSE_TEXT_DELTA:
+            if event.delta:
+                logger.info("Assistant text delta: %s", event.delta)
+
+        elif event.type == ServerEventType.RESPONSE_TEXT_DONE:
+            logger.info("Assistant text done: %s", event.text)
+
+        elif event.type == ServerEventType.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED:
+            logger.info("Transcription: %s", event.transcript)
 
         elif event.type == ServerEventType.RESPONSE_DONE:
             self._active_response = False
@@ -485,6 +511,11 @@ Halte Antworten kurz und klar -- sie werden als Sprache vorgelesen."""
                 and event.call_id == self._pending_function_call["call_id"]
             ):
                 self._pending_function_call["arguments"] = event.arguments
+                logger.info(
+                    "Function call arguments ready: %s -> %s",
+                    self._pending_function_call["name"],
+                    event.arguments,
+                )
 
         elif event.type == ServerEventType.ERROR:
             if "no active response" not in event.error.message.lower():
@@ -610,6 +641,7 @@ Halte Antworten kurz und klar -- sie werden als Sprache vorgelesen."""
             f"Ich habe jetzt das Ergebnis. "
             f"Hier sind die Informationen: {result_text}"
         )
+        logger.info("Injecting tool result (%d chars)", len(full_message))
 
         await self.connection.conversation.item.create(
             item={
@@ -645,6 +677,15 @@ def main():
     if not api_key and not use_token_credential:
         print("ERROR: Set AZURE_VOICELIVE_API_KEY or USE_TOKEN_CREDENTIAL=true in .env")
         sys.exit(1)
+
+    logger.info(
+        "Config: endpoint=%s model=%s voice=%s token_auth=%s api_key_set=%s",
+        endpoint,
+        model,
+        voice,
+        use_token_credential,
+        bool(api_key),
+    )
 
     credential = (
         AzureCliCredential()
