@@ -1,0 +1,47 @@
+{
+  "customers": [
+    {
+      "id": "C-1001",
+      "name": "Maria Schmidt",
+      "phone": "+49 170 1234567"
+    },
+    {
+      "id": "C-1002",
+      "name": "Thomas Mueller",
+      "phone": "+49 171 9876543"
+    }
+  ],
+  "orders": [
+    {
+      "order_id": "ORD-5001",
+      "customer_id": "C-1001",
+      "status": "in_transit",
+      "items": [
+        "Laptop Stand",
+        "USB-C Hub"
+      ],
+      "estimated_delivery": "2026-02-04",
+      "delivery_window": "10:00-14:00"
+    },
+    {
+      "order_id": "ORD-5002",
+      "customer_id": "C-1001",
+      "status": "delivered",
+      "items": [
+        "Wireless Mouse"
+      ],
+      "delivered_at": "2026-02-01"
+    },
+    {
+      "order_id": "ORD-5003",
+      "customer_id": "C-1002",
+      "status": "processing",
+      "items": [
+        "Monitor",
+        "HDMI Cable"
+      ],
+      "estimated_delivery": "2026-02-06",
+      "delivery_window": "12:00-16:00"
+    }
+  ]
+}
