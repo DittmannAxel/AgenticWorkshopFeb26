@@ -87,21 +87,33 @@ if not os.path.exists("logs"):
     os.makedirs("logs")
 
 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+log_format = "%(asctime)s:%(name)s:%(levelname)s:%(message)s"
+
 logging.basicConfig(
     filename=f"logs/{timestamp}_agent_tools.log",
     filemode="w",
-    format="%(asctime)s:%(name)s:%(levelname)s:%(message)s",
-    level=logging.INFO,
+    format=log_format,
+    level=log_level,
 )
+
+# Also log to console for faster debugging
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(logging.Formatter(log_format))
+console_handler.setLevel(log_level)
+logging.getLogger().addHandler(console_handler)
 logger = logging.getLogger(__name__)
 
 
-# Load system prompt from src/prompts/
+# Load system prompt (prefer example-specific prompt)
+LOCAL_PROMPT_PATH = Path(__file__).resolve().parent / "agent_prompt.md"
 PROMPTS_DIR = PROJECT_ROOT / "src" / "prompts"
 SYSTEM_PROMPT_PATH = PROMPTS_DIR / "system_prompt.md"
 
 
 def load_system_prompt() -> str:
+    if LOCAL_PROMPT_PATH.exists():
+        return LOCAL_PROMPT_PATH.read_text(encoding="utf-8")
     if SYSTEM_PROMPT_PATH.exists():
         return SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
     return (
@@ -270,6 +282,7 @@ class AudioProcessor:
         self.output_stream: Optional[pyaudio.Stream] = None
 
     def start_capture(self):
+        logger.info("Starting microphone capture (rate=%s, chunk=%s)", self.rate, self.chunk_size)
         def _capture_callback(in_data, _frame_count, _time_info, _status_flags):
             audio_base64 = base64.b64encode(in_data).decode("utf-8")
             asyncio.run_coroutine_threadsafe(
@@ -291,6 +304,7 @@ class AudioProcessor:
         )
 
     def start_playback(self):
+        logger.info("Starting audio playback")
         if self.output_stream:
             return
         remaining = bytes()
@@ -417,6 +431,8 @@ WICHTIG:
         self.session_ready = False
         self._active_response = False
         self._response_api_done = False
+        self._pending_response_request = False
+        self._resume_after_barge_in = False
 
         # Background agent queries
         self.pending_queries: Dict[str, PendingQuery] = {}
@@ -522,6 +538,8 @@ WICHTIG:
             ap.skip_pending_audio()
 
             if self._active_response and not self._response_api_done:
+                logger.info("Barge-in detected, canceling active response")
+                self._resume_after_barge_in = True
                 try:
                     await conn.response.cancel()
                 except Exception:
@@ -535,6 +553,8 @@ WICHTIG:
             self._response_api_done = False
 
         elif event.type == ServerEventType.RESPONSE_AUDIO_DELTA:
+            if event.delta:
+                logger.debug("Audio delta bytes: %d", len(event.delta))
             ap.queue_audio(event.delta)
 
         elif event.type == ServerEventType.RESPONSE_AUDIO_DONE:
@@ -543,6 +563,11 @@ WICHTIG:
         elif event.type == ServerEventType.RESPONSE_DONE:
             self._active_response = False
             self._response_api_done = True
+
+            if self._pending_response_request:
+                self._pending_response_request = False
+                logger.info("Pending response detected, requesting response now")
+                await conn.response.create()
 
         # ============================================================
         # THIS IS THE KEY EVENT: User's speech has been transcribed.
@@ -554,6 +579,7 @@ WICHTIG:
             if transcript and transcript.strip():
                 print(f"[Transcript: {transcript.strip()}]")
                 logger.info("Transcription: %s", transcript.strip())
+                self._resume_after_barge_in = False
 
                 # Send to agent in background
                 self._query_counter += 1
@@ -567,6 +593,14 @@ WICHTIG:
                     self._process_with_agent(query_id, transcript.strip())
                 )
                 self.pending_queries[query_id] = pending
+            else:
+                if self._resume_after_barge_in:
+                    logger.info("Empty transcript after barge-in, requesting response replay")
+                    self._resume_after_barge_in = False
+                    if not self._active_response:
+                        await conn.response.create()
+                    else:
+                        self._pending_response_request = True
 
         elif event.type == ServerEventType.ERROR:
             if "no active response" not in event.error.message.lower():
@@ -640,8 +674,12 @@ WICHTIG:
             }
         )
 
-        await self.connection.response.create()
-        logger.info("Agent response injected, generating audio")
+        if self._active_response:
+            self._pending_response_request = True
+            logger.info("Response already active; will request response after completion")
+        else:
+            await self.connection.response.create()
+            logger.info("Agent response injected, generating audio")
 
 
 # ============================================================
@@ -689,6 +727,21 @@ def main():
         AzureCliCredential()
         if use_token_credential
         else AzureKeyCredential(voicelive_api_key)
+    )
+
+    logger.info(
+        "Config: endpoint=%s model=%s voice=%s token_auth=%s api_key_set=%s",
+        voicelive_endpoint,
+        voicelive_model,
+        voice,
+        use_token_credential,
+        bool(voicelive_api_key),
+    )
+    logger.info(
+        "Agent config: endpoint=%s project=%s model=%s",
+        agent_endpoint,
+        agent_project,
+        agent_model,
     )
 
     assistant = AgentVoiceAssistant(
