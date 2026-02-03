@@ -470,6 +470,8 @@ Halte Antworten kurz und klar -- sie werden als Sprache vorgelesen."""
             self._response_api_done = False
 
         elif event.type == ServerEventType.RESPONSE_AUDIO_DELTA:
+            if event.delta:
+                logger.debug("Audio delta bytes: %d", len(event.delta))
             ap.queue_audio(event.delta)
 
         elif event.type == ServerEventType.RESPONSE_AUDIO_DONE:
@@ -628,31 +630,29 @@ Halte Antworten kurz und klar -- sie werden als Sprache vorgelesen."""
                         except Exception:
                             pass
 
-                    # 3. Inject result
-                    await self._inject_result(pending.result)
+                    # 3. Send tool result back to VoiceLive
+                    await self._send_tool_result(pending)
 
                     # 4. Clean up
                     pending.state = QueryState.INJECTED
                     del self.pending_queries[query_id]
 
-    async def _inject_result(self, result_text: str):
-        """Injects the tool result as an assistant message for TTS."""
-        full_message = (
-            f"Ich habe jetzt das Ergebnis. "
-            f"Hier sind die Informationen: {result_text}"
+    async def _send_tool_result(self, pending: PendingQuery):
+        """Send the real tool output back so the model can respond with audio."""
+        result_text = pending.result or "{}"
+        logger.info("Sending tool result for %s (%d chars)", pending.function_name, len(result_text))
+
+        function_output = FunctionCallOutputItem(
+            call_id=pending.call_id,
+            output=result_text,
         )
-        logger.info("Injecting tool result (%d chars)", len(full_message))
 
         await self.connection.conversation.item.create(
-            item={
-                "type": "message",
-                "role": "assistant",
-                "content": [{"type": "text", "text": full_message}],
-            }
+            previous_item_id=pending.previous_item_id, item=function_output
         )
 
         await self.connection.response.create()
-        logger.info("Result injected, generating audio")
+        logger.info("Tool result sent, generating audio")
 
 
 # ============================================================
