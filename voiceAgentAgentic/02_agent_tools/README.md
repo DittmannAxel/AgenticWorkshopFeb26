@@ -84,12 +84,10 @@ python main.py
 |---|---|
 | `AZURE_VOICELIVE_ENDPOINT` | Voice Live API endpoint |
 | `AZURE_VOICELIVE_API_KEY` | Voice Live API key (or use token auth) |
-| `AZURE_AI_PROJECT_ENDPOINT` | Azure AI project endpoint |
-| `AZURE_AI_MODEL_DEPLOYMENT_NAME` | Model deployment name |
 
-**Fallbacks supported:**
-- `AZURE_EXISTING_AIPROJECT_ENDPOINT` (instead of `AZURE_AI_PROJECT_ENDPOINT`)
-- `MODEL_DEPLOYMENT_NAME` (instead of `AZURE_AI_MODEL_DEPLOYMENT_NAME`)
+**Optional overrides (only if you want to change the defaults):**
+- `AZURE_AI_PROJECT_ENDPOINT` or `AZURE_EXISTING_AIPROJECT_ENDPOINT`
+- `AZURE_AI_MODEL_DEPLOYMENT_NAME` or `MODEL_DEPLOYMENT_NAME`
 
 ## What to Notice
 

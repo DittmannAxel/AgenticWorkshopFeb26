@@ -95,6 +95,10 @@ console_handler.setLevel(log_level)
 logging.getLogger().addHandler(console_handler)
 logger = logging.getLogger(__name__)
 
+# Defaults for this environment (override via env if needed)
+DEFAULT_PROJECT_ENDPOINT = "https://adminfeb02-resource.services.ai.azure.com/api/projects/adminfeb02"
+DEFAULT_MODEL_DEPLOYMENT = "gpt-4.1"
+
 
 # Load system prompt (prefer example-specific prompt)
 LOCAL_PROMPT_PATH = Path(__file__).resolve().parent / "agent_prompt.md"
@@ -441,7 +445,7 @@ WICHTIG:
             input_audio_format=InputAudioFormat.PCM16,
             output_audio_format=OutputAudioFormat.PCM16,
             turn_detection=ServerVad(
-                threshold=0.65, prefix_padding_ms=300, silence_duration_ms=800
+                threshold=0.5, prefix_padding_ms=300, silence_duration_ms=500
             ),
             input_audio_echo_cancellation=AudioEchoCancellation(),
             input_audio_noise_reduction=AudioNoiseReduction(
@@ -642,11 +646,13 @@ def main():
     project_endpoint = (
         os.environ.get("AZURE_AI_PROJECT_ENDPOINT")
         or os.environ.get("AZURE_EXISTING_AIPROJECT_ENDPOINT")
+        or DEFAULT_PROJECT_ENDPOINT
     )
     model_deployment = (
         os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME")
         or os.environ.get("MODEL_DEPLOYMENT_NAME")
         or os.environ.get("AZURE_AGENT_MODEL")
+        or DEFAULT_MODEL_DEPLOYMENT
     )
 
     # Validate Voice Live config
@@ -656,8 +662,9 @@ def main():
         sys.exit(1)
 
     if not voicelive_api_key and not use_token_credential:
-        print("ERROR: Set AZURE_VOICELIVE_API_KEY or USE_TOKEN_CREDENTIAL=true in .env")
-        sys.exit(1)
+        # Default to Azure CLI auth when no API key is provided.
+        use_token_credential = True
+        logger.info("No API key provided; using Azure CLI token credential")
 
     # Validate local Agent Framework config
     if not project_endpoint:
