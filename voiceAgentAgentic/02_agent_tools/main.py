@@ -137,12 +137,22 @@ class AgentBridge:
     so all calls must go through asyncio.to_thread().
     """
 
-    def __init__(self, endpoint: str, project: str, model: str, tools: list):
+    def __init__(
+        self,
+        endpoint: str,
+        project: str,
+        model: str | None,
+        tools: list,
+        existing_agent_id: str | None = None,
+    ):
         self.agent_endpoint = f"{endpoint}/api/projects/{project}"
         self.model = model
         self.tools = tools
         self.client: Optional[AgentsClient] = None
         self.agent = None
+        self.agent_id: Optional[str] = None
+        self._created_agent = False
+        self.existing_agent_id = existing_agent_id or None
         self.thread_id: Optional[str] = None
 
     def initialize(self):
@@ -155,6 +165,9 @@ class AgentBridge:
             credential=DefaultAzureCredential(),
         )
 
+        if not self.existing_agent_id:
+            raise ValueError("AZURE_EXISTING_AGENT_ID is required; agent creation is disabled.")
+
         # Register all tool functions with the SDK
         toolset = ToolSet()
         functions = AgentFunctionTool(self.tools)
@@ -164,17 +177,8 @@ class AgentBridge:
         # automatically when the agent requests them
         self.client.enable_auto_function_calls(toolset)
 
-        # Load system prompt
-        system_prompt = load_system_prompt()
-
-        # Create the agent
-        self.agent = self.client.create_agent(
-            model=self.model,
-            name="voice-customer-service-agent",
-            instructions=system_prompt,
-            toolset=toolset,
-        )
-        logger.info("Agent created: id=%s, model=%s", self.agent.id, self.model)
+        self.agent_id = self.existing_agent_id
+        logger.info("Using existing agent: id=%s", self.agent_id)
 
         # Create a conversation thread for this session
         thread = self.client.threads.create()
@@ -191,7 +195,7 @@ class AgentBridge:
         2. Call tools if needed (auto-executed by the SDK)
         3. Generate a natural language response
         """
-        assert self.client is not None and self.agent is not None
+        assert self.client is not None and self.agent_id is not None
 
         self.client.messages.create(
             thread_id=self.thread_id,
@@ -201,7 +205,7 @@ class AgentBridge:
 
         run = self.client.runs.create_and_process(
             thread_id=self.thread_id,
-            agent_id=self.agent.id,
+            agent_id=self.agent_id,
         )
         logger.info("Agent run completed: status=%s", run.status)
 
@@ -224,9 +228,7 @@ class AgentBridge:
 
     def cleanup(self):
         """Delete the agent to free resources."""
-        if self.client and self.agent:
-            self.client.delete_agent(self.agent.id)
-            logger.info("Agent deleted: %s", self.agent.id)
+        # Do not delete externally managed agents.
 
 
 # ============================================================
@@ -403,6 +405,7 @@ class AgentVoiceAssistant:
         agent_endpoint: str,
         agent_project: str,
         agent_model: str,
+        existing_agent_id: str | None = None,
     ):
         self.voicelive_endpoint = voicelive_endpoint
         self.voicelive_credential = voicelive_credential
@@ -415,6 +418,7 @@ class AgentVoiceAssistant:
             project=agent_project,
             model=agent_model,
             tools=ALL_TOOLS,
+            existing_agent_id=existing_agent_id,
         )
 
         # VoiceLive instructions: minimal, just acknowledge and wait
@@ -701,6 +705,10 @@ def main():
     agent_endpoint = os.environ.get("AZURE_AGENT_ENDPOINT")
     agent_project = os.environ.get("AZURE_AGENT_PROJECT")
     agent_model = os.environ.get("AZURE_AGENT_MODEL", "gpt-4.1")
+    existing_agent_id = (
+        os.environ.get("AZURE_EXISTING_AGENT_ID")
+        or os.environ.get("AZURE_AGENT_ID")
+    )
 
     # Validate Voice Live config
     if not voicelive_endpoint:
@@ -723,6 +731,11 @@ def main():
         print("Set your AI Foundry project name in .env")
         sys.exit(1)
 
+    if not existing_agent_id:
+        print("ERROR: AZURE_EXISTING_AGENT_ID is not set.")
+        print("This example only uses an existing agent; creation is disabled.")
+        sys.exit(1)
+
     voicelive_credential = (
         AzureCliCredential()
         if use_token_credential
@@ -743,6 +756,7 @@ def main():
         agent_project,
         agent_model,
     )
+    logger.info("Existing agent id: %s", existing_agent_id or "none")
 
     assistant = AgentVoiceAssistant(
         voicelive_endpoint=voicelive_endpoint,
@@ -752,6 +766,7 @@ def main():
         agent_endpoint=agent_endpoint,
         agent_project=agent_project,
         agent_model=agent_model,
+        existing_agent_id=existing_agent_id,
     )
 
     def signal_handler(_sig, _frame):
