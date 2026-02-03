@@ -54,9 +54,9 @@ sequenceDiagram
 from agent_framework.azure import AzureAIClient
 
 client = AzureAIClient(
-    async_credential=AzureCliCredential(),
-    azure_ai_project_endpoint=project_endpoint,
-    azure_ai_model_deployment_name=model_deployment,
+    credential=AzureCliCredential(),
+    project_endpoint=project_endpoint,
+    model_deployment_name=model_deployment,
 )
 agent = client.as_agent(instructions=system_prompt)
 

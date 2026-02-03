@@ -70,11 +70,11 @@ async def run_agent(user_text: str) -> str:
         )
 
     async with AzureCliCredential() as credential:
-        client = AzureAIClient(
-            async_credential=credential,
-            azure_ai_project_endpoint=project_endpoint,
-            azure_ai_model_deployment_name=model_deployment,
-        )
+    client = AzureAIClient(
+        credential=credential,
+        project_endpoint=project_endpoint,
+        model_deployment_name=model_deployment,
+    )
         agent = client.as_agent(instructions=INSTRUCTIONS)
 
         message = build_user_message(user_text, dataset)

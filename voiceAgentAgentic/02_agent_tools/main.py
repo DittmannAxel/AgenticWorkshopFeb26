@@ -149,9 +149,9 @@ class AgentBridge:
     async def initialize(self):
         self._credential = AzureCliCredential()
         self._client = AzureAIClient(
-            async_credential=self._credential,
-            azure_ai_project_endpoint=self.project_endpoint,
-            azure_ai_model_deployment_name=self.model,
+            credential=self._credential,
+            project_endpoint=self.project_endpoint,
+            model_deployment_name=self.model,
         )
         self._agent = self._client.as_agent(instructions=self.instructions)
         logger.info("Local Agent Framework initialized")
