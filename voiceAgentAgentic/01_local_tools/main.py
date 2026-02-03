@@ -354,6 +354,7 @@ Halte Antworten kurz und klar -- sie werden als Sprache vorgelesen."""
         self.session_ready = False
         self._active_response = False
         self._response_api_done = False
+        self._pending_response_request = False
 
         self._pending_function_call: Optional[Dict[str, Any]] = None
         self.pending_queries: Dict[str, PendingQuery] = {}
@@ -460,10 +461,6 @@ Halte Antworten kurz und klar -- sie werden als Sprache vorgelesen."""
 
         elif event.type == ServerEventType.INPUT_AUDIO_BUFFER_SPEECH_STOPPED:
             print("[Processing...]")
-            # Trigger a response if none is active
-            if not self._active_response:
-                logger.info("Speech stopped, requesting response")
-                await conn.response.create()
 
         elif event.type == ServerEventType.RESPONSE_CREATED:
             self._active_response = True
@@ -490,6 +487,11 @@ Halte Antworten kurz und klar -- sie werden als Sprache vorgelesen."""
         elif event.type == ServerEventType.RESPONSE_DONE:
             self._active_response = False
             self._response_api_done = True
+
+            if self._pending_response_request:
+                self._pending_response_request = False
+                logger.info("Pending response detected, requesting response now")
+                await conn.response.create()
 
             if (
                 self._pending_function_call
@@ -518,6 +520,12 @@ Halte Antworten kurz und klar -- sie werden als Sprache vorgelesen."""
                     self._pending_function_call["name"],
                     event.arguments,
                 )
+
+        elif event.type == ServerEventType.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED:
+            logger.info("Transcription: %s", event.transcript)
+            if not self._active_response:
+                logger.info("Transcription completed, requesting response")
+                await conn.response.create()
 
         elif event.type == ServerEventType.ERROR:
             if "no active response" not in event.error.message.lower():
@@ -651,8 +659,13 @@ Halte Antworten kurz und klar -- sie werden als Sprache vorgelesen."""
             previous_item_id=pending.previous_item_id, item=function_output
         )
 
-        await self.connection.response.create()
-        logger.info("Tool result sent, generating audio")
+        if self._active_response:
+            # Wait for current response to finish, then request a new one
+            self._pending_response_request = True
+            logger.info("Response already active; will request response after completion")
+        else:
+            await self.connection.response.create()
+            logger.info("Tool result sent, generating audio")
 
 
 # ============================================================
