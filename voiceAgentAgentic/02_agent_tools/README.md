@@ -1,8 +1,8 @@
-# Step 2: Voice Live with Azure AI Agent SDK
+# Step 2: Voice Live with Local Agent Framework
 
-In this step, **VoiceLive handles only audio** (speech-to-text and text-to-speech). The **Azure AI Agent SDK** handles reasoning, tool selection, and tool execution.
+In this step, **VoiceLive handles only audio** (speech-to-text and text-to-speech). A **local Agent Framework** agent handles reasoning and generates responses from a **local JSON dataset**.
 
-This is the production pattern: separate audio processing from intelligence.
+This keeps the audio pipeline in Azure, but removes the cloud Agent Service from the loop.
 
 ---
 
@@ -14,123 +14,87 @@ sequenceDiagram
     participant U as User
     participant VL as VoiceLive<br/>(Audio Only)
     participant Code as Your Code
-    participant Agent as Agent SDK
-    participant Tools as Tools<br/>(auto-executed)
+    participant Agent as Local Agent Framework
+    participant Data as Local Data<br/>(JSON)
 
     U->>VL: "Where is my order?"
-    VL->>VL: STT (Whisper)
-    VL->>Code: TRANSCRIPTION_COMPLETED<br/>("Where is my order?")
+    VL->>VL: STT (Azure Speech)
+    VL->>Code: TRANSCRIPTION_COMPLETED
 
     Code->>VL: Inject filler message
     VL->>U: "One moment please..."
 
-    Code->>Agent: process_message("Where is my order?")
-    Agent->>Agent: LLM decides: call get_recent_orders
-    Agent->>Tools: get_recent_orders(customer_id="C-1001")
-    Tools-->>Agent: {"orders": [...]}
-    Agent->>Agent: LLM formats response
+    Code->>Agent: run(message + dataset)
+    Agent->>Data: read orders/customers
     Agent-->>Code: "Your order ORD-5001 is in transit..."
 
     Note over Code: Background checker detects result
 
     Code->>Code: skip_pending_audio()
     Code->>VL: response.cancel()
-    Code->>VL: conversation.item.create<br/>(role: assistant, text: agent response)
+    Code->>VL: conversation.item.create<br/>(role: user, prefixed)
     Code->>VL: response.create()
     VL->>U: "Your order ORD-5001 is in transit..."
 ```
 
 ## What Changed from Step 1
 
-| Aspect | Step 1 | Step 2 |
+| Aspect | Step 1 | Step 2 (Local Agent) |
 |--------|--------|--------|
 | VoiceLive session tools | 8 FunctionTool schemas | **None** |
 | VoiceLive session instructions | Full agent personality | Minimal ("acknowledge and wait") |
 | Event that triggers logic | `FUNCTION_CALL` | **`TRANSCRIPTION_COMPLETED`** |
-| Tool execution | Local Python dispatch | **Agent SDK auto-execution** |
-| New dependency | -- | **`azure-ai-agents` + AgentsClient** |
-| Conversation memory | VoiceLive session | **Agent thread (persistent)** |
+| Reasoning | Local Python tool dispatch | **Local Agent Framework + JSON data** |
+| New dependency | -- | **`agent-framework` (pre-release)** |
+| Conversation memory | VoiceLive session | **Stateless (per request)** |
 
-### Code Diff Highlights
+## Local Agent Framework Flow
 
-**Session setup** -- No tools on VoiceLive:
 ```python
-# Step 1: tools registered on VoiceLive
-session_config = RequestSession(
-    tools=tools,                    # <-- 8 FunctionTool schemas
-    tool_choice=ToolChoiceLiteral.AUTO,
-    ...
+from agent_framework.azure import AzureAIClient
+
+client = AzureAIClient(
+    async_credential=AzureCliCredential(),
+    azure_ai_project_endpoint=project_endpoint,
+    azure_ai_model_deployment_name=model_deployment,
 )
+agent = client.as_agent(instructions=system_prompt)
 
-# Step 2: no tools on VoiceLive
-session_config = RequestSession(
-    # tools=...                     # <-- REMOVED
-    # tool_choice=...               # <-- REMOVED
-    input_audio_transcription=AudioInputTranscriptionOptions(model="azure-speech"),
-    ...
-)
+result = await agent.run(message_with_dataset)
 ```
-
-**Event handling** -- Different trigger:
-```python
-# Step 1: react to tool call events
-elif event.type == ServerEventType.CONVERSATION_ITEM_CREATED:
-    if event.item.type == ItemType.FUNCTION_CALL:
-        # Execute tool locally...
-
-# Step 2: react to transcription events
-elif event.type == ServerEventType.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED:
-    transcript = event.transcript
-    # Send to Agent SDK...
-```
-
-**Tool execution** -- SDK handles it:
-```python
-# Step 1: manual dispatch
-tool_func = TOOL_DISPATCH[function_name]
-result = tool_func(**args)
-
-# Step 2: SDK auto-executes tools
-client.enable_auto_function_calls(toolset)   # one-time setup
-run = client.runs.create_and_process(...)    # SDK calls tools internally
-```
-
-## The `asyncio.to_thread()` Bridge
-
-The Agent SDK (`azure-ai-agents`) is **synchronous** -- `runs.create_and_process()` blocks until the agent finishes. Since VoiceLive runs in an async event loop, we bridge with:
-
-```python
-response = await asyncio.to_thread(
-    self.agent_bridge.process_message, transcript
-)
-```
-
-This runs the blocking agent call in a separate thread without freezing the audio loop.
 
 ## Setup
 
 ```bash
 cd voiceAgentAgentic
-cp .env.example .env   # fill in ALL credentials (Voice Live + Agent)
+cp .env.example .env   # fill in ALL credentials (Voice Live + AI project)
+
 pip install -r requirements.txt
+pip install --pre agent-framework
+
+az login
+
 cd 02_agent_tools
 python main.py
 ```
 
-**Required environment variables for this step:**
+## Required environment variables
 
 | Variable | Purpose |
 |---|---|
 | `AZURE_VOICELIVE_ENDPOINT` | Voice Live API endpoint |
-| `AZURE_VOICELIVE_API_KEY` | Voice Live API key |
-| `AZURE_AGENT_ENDPOINT` | AI Foundry endpoint |
-| `AZURE_AGENT_PROJECT` | AI Foundry project name |
-| `AZURE_AGENT_MODEL` | Model deployment (e.g. `gpt-4.1`) |
+| `AZURE_VOICELIVE_API_KEY` | Voice Live API key (or use token auth) |
+| `AZURE_AI_PROJECT_ENDPOINT` | Azure AI project endpoint |
+| `AZURE_AI_MODEL_DEPLOYMENT_NAME` | Model deployment name |
+
+**Fallbacks supported:**
+- `AZURE_EXISTING_AIPROJECT_ENDPOINT` (instead of `AZURE_AI_PROJECT_ENDPOINT`)
+- `MODEL_DEPLOYMENT_NAME` (instead of `AZURE_AI_MODEL_DEPLOYMENT_NAME`)
 
 ## What to Notice
 
-- The VoiceLive session has **zero tools** -- it only does audio
-- The Agent SDK creates an agent at startup and deletes it on exit
-- `asyncio.to_thread()` bridges the sync SDK with the async event loop
+- VoiceLive is **audio-only** in this step
+- The agent runs locally and reads `data/orders.json`
+- No cloud agent is created or managed
 - A `processing_lock` prevents concurrent agent calls
-- The agent maintains full conversation history in its thread
+- The result is injected via a user message with a prefix (no pre-generated assistant message)

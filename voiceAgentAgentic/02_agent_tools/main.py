@@ -1,21 +1,20 @@
 # -------------------------------------------------------------------------
-# Step 2: Voice Live API + Azure AI Agent SDK
+# Step 2: Voice Live API + Local Agent Framework
 # -------------------------------------------------------------------------
 #
 # In this example, VoiceLive handles ONLY the audio (STT + TTS).
-# The Azure AI Agent Service handles reasoning and tool execution.
+# The local Agent Framework handles reasoning and response generation.
 #
 # Flow:
 #   User speaks -> VoiceLive (STT) -> Transcription event
-#     -> Your code sends text to Agent SDK
-#     -> Agent SDK calls tools automatically, generates response
+#     -> Your code sends text to the local Agent Framework
+#     -> Agent Framework generates a response from the local dataset
 #     -> Your code injects response into VoiceLive -> VoiceLive (TTS) -> User
 #
 # Key difference from Step 1:
 #   - NO tools registered on the VoiceLive session
-#   - Tools registered on the Agent SDK via ToolSet + FunctionTool
 #   - Trigger is TRANSCRIPTION_COMPLETED, not FUNCTION_CALL
-#   - Agent SDK has persistent conversation threads (multi-turn memory)
+#   - Agent Framework runs locally (no cloud agent created)
 # -------------------------------------------------------------------------
 from __future__ import annotations
 
@@ -52,15 +51,8 @@ from azure.ai.voicelive.models import (
     AudioInputTranscriptionOptions,
 )
 
-# Agent SDK (synchronous -- will be called via asyncio.to_thread)
-from azure.ai.agents import AgentsClient
-from azure.ai.agents.models import (
-    FunctionTool as AgentFunctionTool,
-    ToolSet,
-    MessageRole,
-    ListSortOrder,
-)
-from azure.identity import DefaultAzureCredential
+# Local Agent Framework
+from agent_framework.azure import AzureAIClient
 
 from dotenv import load_dotenv
 import pyaudio
@@ -71,11 +63,10 @@ if TYPE_CHECKING:
     from azure.ai.voicelive.aio import VoiceLiveConnection
 
 # ---------------------------------------------------------------------------
-# Path setup: import real tools from src/tools/
+# Path setup: allow shared prompts from src/
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
-from src.tools import ALL_TOOLS  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Environment & Logging
@@ -109,6 +100,7 @@ logger = logging.getLogger(__name__)
 LOCAL_PROMPT_PATH = Path(__file__).resolve().parent / "agent_prompt.md"
 PROMPTS_DIR = PROJECT_ROOT / "src" / "prompts"
 SYSTEM_PROMPT_PATH = PROMPTS_DIR / "system_prompt.md"
+DATA_PATH = Path(__file__).resolve().parent / "data" / "orders.json"
 
 
 def load_system_prompt() -> str:
@@ -124,111 +116,57 @@ def load_system_prompt() -> str:
     )
 
 
+def load_dataset() -> dict:
+    if not DATA_PATH.exists():
+        raise FileNotFoundError(f"Dataset not found: {DATA_PATH}")
+    return json.loads(DATA_PATH.read_text(encoding="utf-8"))
+
+
 # ============================================================
-# AGENT BRIDGE: Wraps the Azure AI Agent SDK
+# AGENT BRIDGE: Local Agent Framework
 # ============================================================
 
 
 class AgentBridge:
-    """Bridges the synchronous Azure AI Agent SDK for use in an async context.
+    """Local Agent Framework bridge.
 
-    Creates a Foundry Agent with all tools registered. Processes user
-    messages synchronously (the SDK's runs.create_and_process is blocking),
-    so all calls must go through asyncio.to_thread().
+    Uses AzureAIClient locally (not Foundry Agent Service).
+    The agent answers based on the provided dataset.
     """
 
-    def __init__(
-        self,
-        endpoint: str,
-        project: str,
-        model: str | None,
-        tools: list,
-        existing_agent_id: str | None = None,
-    ):
-        self.agent_endpoint = f"{endpoint}/api/projects/{project}"
+    def __init__(self, project_endpoint: str, model: str, instructions: str):
+        self.project_endpoint = project_endpoint
         self.model = model
-        self.tools = tools
-        self.client: Optional[AgentsClient] = None
-        self.agent = None
-        self.agent_id: Optional[str] = None
-        self._created_agent = False
-        self.existing_agent_id = existing_agent_id or None
-        self.thread_id: Optional[str] = None
+        self.instructions = instructions
+        self._credential: Optional[AzureCliCredential] = None
+        self._client: Optional[AzureAIClient] = None
+        self._agent = None
 
-    def initialize(self):
-        """Create the Agent SDK client, agent, and conversation thread.
-
-        This is synchronous -- call via asyncio.to_thread() from async code.
-        """
-        self.client = AgentsClient(
-            endpoint=self.agent_endpoint,
-            credential=DefaultAzureCredential(),
+    async def initialize(self):
+        self._credential = AzureCliCredential()
+        self._client = AzureAIClient(
+            async_credential=self._credential,
+            azure_ai_project_endpoint=self.project_endpoint,
+            azure_ai_model_deployment_name=self.model,
         )
+        self._agent = self._client.as_agent(instructions=self.instructions)
+        logger.info("Local Agent Framework initialized")
 
-        if not self.existing_agent_id:
-            raise ValueError("AZURE_EXISTING_AGENT_ID is required; agent creation is disabled.")
+    async def process_message(self, user_text: str) -> str:
+        assert self._agent is not None
 
-        # Register all tool functions with the SDK
-        toolset = ToolSet()
-        functions = AgentFunctionTool(self.tools)
-        toolset.add(functions)
+        dataset = load_dataset()
+        data_json = json.dumps(dataset, ensure_ascii=False, indent=2)
+        message = f"Nutzeranfrage: {user_text}\n\nDATEN (JSON):\n{data_json}"
 
-        # Enable auto function calling: the SDK will execute tool functions
-        # automatically when the agent requests them
-        self.client.enable_auto_function_calls(toolset)
+        result = await self._agent.run(message)
+        response_text = getattr(result, "text", str(result))
+        logger.info("Agent response: %s", response_text[:200])
+        return response_text
 
-        self.agent_id = self.existing_agent_id
-        logger.info("Using existing agent: id=%s", self.agent_id)
-
-        # Create a conversation thread for this session
-        thread = self.client.threads.create()
-        self.thread_id = thread.id
-        logger.info("Thread created: %s", self.thread_id)
-
-    def process_message(self, user_text: str) -> str:
-        """Send user text to the agent and return the response.
-
-        This is SYNCHRONOUS -- must be called via asyncio.to_thread().
-
-        The agent will:
-        1. Interpret the user's intent
-        2. Call tools if needed (auto-executed by the SDK)
-        3. Generate a natural language response
-        """
-        assert self.client is not None and self.agent_id is not None
-
-        self.client.messages.create(
-            thread_id=self.thread_id,
-            role=MessageRole.USER,
-            content=user_text,
-        )
-
-        run = self.client.runs.create_and_process(
-            thread_id=self.thread_id,
-            agent_id=self.agent_id,
-        )
-        logger.info("Agent run completed: status=%s", run.status)
-
-        if run.status == "failed":
-            logger.error("Agent run failed: %s", run.last_error)
-            return "Entschuldigung, es ist ein Fehler aufgetreten. Bitte versuchen Sie es erneut."
-
-        messages = self.client.messages.list(
-            thread_id=self.thread_id,
-            order=ListSortOrder.DESCENDING,
-        )
-
-        for msg in messages:
-            if msg.role == MessageRole.AGENT and msg.text_messages:
-                response_text = msg.text_messages[-1].text.value
-                logger.info("Agent response: %s", response_text[:200])
-                return response_text
-
-        return "Entschuldigung, ich konnte Ihre Anfrage nicht verarbeiten."
-
-    def cleanup(self):
-        """Delete the agent to free resources."""
-        # Do not delete externally managed agents.
+    async def cleanup(self):
+        if self._credential:
+            await self._credential.close()
 
 
 # ============================================================
@@ -387,12 +325,12 @@ class AudioProcessor:
 class AgentVoiceAssistant:
     """
     Voice assistant where VoiceLive handles audio (STT/TTS) and the
-    Azure AI Agent SDK handles reasoning and tool execution.
+    local Agent Framework handles reasoning and response generation.
 
     Key difference from Step 1:
       - VoiceLive session has NO tools registered
-      - Transcription events trigger agent calls
-      - Agent SDK decides which tools to call and executes them
+      - Transcription events trigger local agent calls
+      - Agent Framework uses the local dataset to answer
       - Agent response is injected back for TTS
     """
 
@@ -402,23 +340,19 @@ class AgentVoiceAssistant:
         voicelive_credential: Union[AzureKeyCredential, AsyncTokenCredential],
         voicelive_model: str,
         voice: str,
-        agent_endpoint: str,
-        agent_project: str,
-        agent_model: str,
-        existing_agent_id: str | None = None,
+        project_endpoint: str,
+        model_deployment: str,
     ):
         self.voicelive_endpoint = voicelive_endpoint
         self.voicelive_credential = voicelive_credential
         self.voicelive_model = voicelive_model
         self.voice = voice
 
-        # Agent bridge handles the Foundry Agent SDK
+        # Local Agent Framework bridge
         self.agent_bridge = AgentBridge(
-            endpoint=agent_endpoint,
-            project=agent_project,
-            model=agent_model,
-            tools=ALL_TOOLS,
-            existing_agent_id=existing_agent_id,
+            project_endpoint=project_endpoint,
+            model=model_deployment,
+            instructions=load_system_prompt(),
         )
 
         # VoiceLive instructions: minimal, just acknowledge and wait
@@ -428,7 +362,10 @@ WICHTIG:
 - Wenn der Nutzer etwas sagt, antworte KURZ mit einer Bestaetigung wie
   "Einen Moment bitte, ich schaue das fuer Sie nach."
 - Halte dich kurz. Du wirst gleich die eigentliche Antwort erhalten.
-- Antworte auf Deutsch in der Sie-Form."""
+- Antworte auf Deutsch in der Sie-Form.
+- Falls eine Nachricht mit dem Praefix "[AGENT_RESPONSE]" beginnt, gib den Text
+  nach dem Praefix wortwoertlich aus und fuege nichts hinzu."""
+        self._agent_response_prefix = "[AGENT_RESPONSE]"
 
         self.connection: Optional["VoiceLiveConnection"] = None
         self.audio_processor: Optional[AudioProcessor] = None
@@ -447,14 +384,11 @@ WICHTIG:
         self._processing_lock = asyncio.Lock()
 
     async def start(self):
-        """Starts the Voice Assistant with Agent SDK."""
+        """Starts the Voice Assistant with local Agent Framework."""
         try:
-            # Initialize the Agent SDK (synchronous, run in thread)
-            print("Initializing Azure AI Agent Service...")
-            await asyncio.to_thread(self.agent_bridge.initialize)
-            print(f"Agent created with {len(ALL_TOOLS)} tools:")
-            for t in ALL_TOOLS:
-                print(f"  - {t.__name__}")
+            # Initialize the local Agent Framework
+            print("Initializing local Agent Framework...")
+            await self.agent_bridge.initialize()
 
             logger.info("Connecting to VoiceLive API...")
 
@@ -474,8 +408,8 @@ WICHTIG:
                 )
 
                 print("\n" + "=" * 60)
-                print("STEP 2: VOICE LIVE + AGENT SDK")
-                print("VoiceLive handles audio. Agent SDK handles reasoning + tools.")
+                print("STEP 2: VOICE LIVE + LOCAL AGENT FRAMEWORK")
+                print("VoiceLive handles audio. Local agent handles reasoning.")
                 print("Speak into your microphone. Press Ctrl+C to exit.")
                 print("=" * 60 + "\n")
 
@@ -486,9 +420,8 @@ WICHTIG:
                 self._result_checker_task.cancel()
             if self.audio_processor:
                 self.audio_processor.shutdown()
-            # Clean up agent
             try:
-                await asyncio.to_thread(self.agent_bridge.cleanup)
+                await self.agent_bridge.cleanup()
             except Exception:
                 pass
 
@@ -500,7 +433,7 @@ WICHTIG:
         )
 
         # NOTE: No tools registered here! VoiceLive is audio-only.
-        # The Agent SDK handles all tool logic.
+        # The local Agent Framework handles all reasoning.
         session_config = RequestSession(
             modalities=[Modality.TEXT, Modality.AUDIO],
             instructions=self.instructions,
@@ -508,14 +441,14 @@ WICHTIG:
             input_audio_format=InputAudioFormat.PCM16,
             output_audio_format=OutputAudioFormat.PCM16,
             turn_detection=ServerVad(
-                threshold=0.5, prefix_padding_ms=300, silence_duration_ms=500
+                threshold=0.65, prefix_padding_ms=300, silence_duration_ms=800
             ),
             input_audio_echo_cancellation=AudioEchoCancellation(),
             input_audio_noise_reduction=AudioNoiseReduction(
                 type="azure_deep_noise_suppression"
             ),
             # Transcription is critical: this is how we get the user's text
-            # to send to the Agent SDK
+            # to send to the local agent
             input_audio_transcription=AudioInputTranscriptionOptions(model="azure-speech"),
         )
 
@@ -576,7 +509,7 @@ WICHTIG:
         # ============================================================
         # THIS IS THE KEY EVENT: User's speech has been transcribed.
         # Instead of letting VoiceLive handle tool calls (Step 1),
-        # we send the transcript to the Agent SDK.
+        # we send the transcript to the local agent.
         # ============================================================
         elif event.type == ServerEventType.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED:
             transcript = event.transcript
@@ -615,15 +548,12 @@ WICHTIG:
     # ================================================================
 
     async def _process_with_agent(self, query_id: str, transcript: str):
-        """Sends transcript to the Agent SDK and stores the response."""
+        """Sends transcript to the local agent and stores the response."""
         try:
             async with self._processing_lock:
                 logger.info(f"[{query_id}] Sending to agent: {transcript}")
 
-                # The Agent SDK is synchronous, so we run it in a thread
-                response = await asyncio.to_thread(
-                    self.agent_bridge.process_message, transcript
-                )
+                response = await self.agent_bridge.process_message(transcript)
 
                 logger.info(f"[{query_id}] Agent response: {response[:200]}")
 
@@ -669,12 +599,19 @@ WICHTIG:
                     del self.pending_queries[query_id]
 
     async def _inject_agent_response(self, response_text: str):
-        """Injects the agent's response as an assistant message for TTS."""
+        """Injects the agent's response and asks VoiceLive to read it aloud.
+
+        We avoid pre-generated assistant messages by sending a prefixed user
+        message and instructing VoiceLive to repeat it verbatim.
+        """
+        # Override instructions for this response only via the message prefix.
+        voice_text = f"{self._agent_response_prefix} {response_text}"
+
         await self.connection.conversation.item.create(
             item={
                 "type": "message",
-                "role": "assistant",
-                "content": [{"type": "text", "text": response_text}],
+                "role": "user",
+                "content": [{"type": "input_text", "text": voice_text}],
             }
         )
 
@@ -701,13 +638,15 @@ def main():
         os.environ.get("USE_TOKEN_CREDENTIAL", "false").lower() == "true"
     )
 
-    # Agent SDK config
-    agent_endpoint = os.environ.get("AZURE_AGENT_ENDPOINT")
-    agent_project = os.environ.get("AZURE_AGENT_PROJECT")
-    agent_model = os.environ.get("AZURE_AGENT_MODEL", "gpt-4.1")
-    existing_agent_id = (
-        os.environ.get("AZURE_EXISTING_AGENT_ID")
-        or os.environ.get("AZURE_AGENT_ID")
+    # Local Agent Framework config
+    project_endpoint = (
+        os.environ.get("AZURE_AI_PROJECT_ENDPOINT")
+        or os.environ.get("AZURE_EXISTING_AIPROJECT_ENDPOINT")
+    )
+    model_deployment = (
+        os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME")
+        or os.environ.get("MODEL_DEPLOYMENT_NAME")
+        or os.environ.get("AZURE_AGENT_MODEL")
     )
 
     # Validate Voice Live config
@@ -720,20 +659,15 @@ def main():
         print("ERROR: Set AZURE_VOICELIVE_API_KEY or USE_TOKEN_CREDENTIAL=true in .env")
         sys.exit(1)
 
-    # Validate Agent SDK config
-    if not agent_endpoint:
-        print("ERROR: AZURE_AGENT_ENDPOINT is not set.")
-        print("This is required for Step 2 (Agent SDK integration).")
+    # Validate local Agent Framework config
+    if not project_endpoint:
+        print("ERROR: AZURE_AI_PROJECT_ENDPOINT is not set.")
+        print("Set AZURE_AI_PROJECT_ENDPOINT or AZURE_EXISTING_AIPROJECT_ENDPOINT.")
         sys.exit(1)
 
-    if not agent_project:
-        print("ERROR: AZURE_AGENT_PROJECT is not set.")
-        print("Set your AI Foundry project name in .env")
-        sys.exit(1)
-
-    if not existing_agent_id:
-        print("ERROR: AZURE_EXISTING_AGENT_ID is not set.")
-        print("This example only uses an existing agent; creation is disabled.")
+    if not model_deployment:
+        print("ERROR: AZURE_AI_MODEL_DEPLOYMENT_NAME is not set.")
+        print("Set AZURE_AI_MODEL_DEPLOYMENT_NAME or MODEL_DEPLOYMENT_NAME.")
         sys.exit(1)
 
     voicelive_credential = (
@@ -751,22 +685,18 @@ def main():
         bool(voicelive_api_key),
     )
     logger.info(
-        "Agent config: endpoint=%s project=%s model=%s",
-        agent_endpoint,
-        agent_project,
-        agent_model,
+        "Local agent config: project_endpoint=%s model=%s",
+        project_endpoint,
+        model_deployment,
     )
-    logger.info("Existing agent id: %s", existing_agent_id or "none")
 
     assistant = AgentVoiceAssistant(
         voicelive_endpoint=voicelive_endpoint,
         voicelive_credential=voicelive_credential,
         voicelive_model=voicelive_model,
         voice=voice,
-        agent_endpoint=agent_endpoint,
-        agent_project=agent_project,
-        agent_model=agent_model,
-        existing_agent_id=existing_agent_id,
+        project_endpoint=project_endpoint,
+        model_deployment=model_deployment,
     )
 
     def signal_handler(_sig, _frame):

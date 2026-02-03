@@ -4,6 +4,9 @@ azure-ai-agents>=1.0.0
 azure-identity>=1.15.0
 azure-core>=1.30.0
 
+# Local Agent Framework (pre-release)
+agent-framework>=0.0.0a0
+
 # Audio (for local microphone)
 pyaudio>=0.2.14
 
