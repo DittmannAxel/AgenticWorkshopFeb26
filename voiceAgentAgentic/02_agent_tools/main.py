@@ -1,29 +1,29 @@
 # -------------------------------------------------------------------------
-# Step 2: Voice Live API + Local Agent Framework
+# Step 2: Voice Live API + Azure AI Foundry Agent
 # -------------------------------------------------------------------------
 #
 # In this example, VoiceLive handles ONLY the audio (STT + TTS).
-# The local Agent Framework handles reasoning and response generation.
+# The Azure AI Foundry Agent handles reasoning and response generation.
 #
 # Flow:
 #   User speaks -> VoiceLive (STT) -> Transcription event
-#     -> Your code sends text to the local Agent Framework
-#     -> Agent Framework generates a response from the local dataset
+#     -> Your code sends text to the Foundry Agent
+#     -> Foundry Agent generates the response
 #     -> Your code injects response into VoiceLive -> VoiceLive (TTS) -> User
 #
 # Key difference from Step 1:
 #   - NO tools registered on the VoiceLive session
 #   - Trigger is TRANSCRIPTION_COMPLETED, not FUNCTION_CALL
-#   - Agent Framework runs locally (no cloud agent created)
+#   - Foundry Agent runs in Azure (existing agent id)
 # -------------------------------------------------------------------------
 from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import logging
 import os
 import queue
+import re
 import signal
 import sys
 from dataclasses import dataclass
@@ -31,10 +31,14 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
+from urllib.parse import urlsplit
 
 from azure.core.credentials import AzureKeyCredential
 from azure.core.credentials_async import AsyncTokenCredential
 from azure.identity.aio import AzureCliCredential
+from azure.identity import DefaultAzureCredential
+from azure.ai.agents import AgentsClient
+from azure.ai.agents.models import MessageRole, ListSortOrder
 
 # Voice Live SDK
 from azure.ai.voicelive.aio import connect
@@ -50,9 +54,6 @@ from azure.ai.voicelive.models import (
     ServerVad,
     AudioInputTranscriptionOptions,
 )
-
-# Local Agent Framework
-from agent_framework.azure import AzureAIClient
 
 from dotenv import load_dotenv
 import pyaudio
@@ -96,15 +97,14 @@ logging.getLogger().addHandler(console_handler)
 logger = logging.getLogger(__name__)
 
 # Defaults for this environment (override via env if needed)
-DEFAULT_PROJECT_ENDPOINT = "https://adminfeb02-resource.services.ai.azure.com/api/projects/adminfeb02"
-DEFAULT_MODEL_DEPLOYMENT = "gpt-4.1"
+DEFAULT_AGENT_ENDPOINT = "https://adminfeb02-resource.services.ai.azure.com/api/projects/adminfeb02"
+DEFAULT_AGENT_ID = "agentFeborder:2"
 
 
 # Load system prompt (prefer example-specific prompt)
 LOCAL_PROMPT_PATH = Path(__file__).resolve().parent / "agent_prompt.md"
 PROMPTS_DIR = PROJECT_ROOT / "src" / "prompts"
 SYSTEM_PROMPT_PATH = PROMPTS_DIR / "system_prompt.md"
-DATA_PATH = Path(__file__).resolve().parent / "data" / "orders.json"
 
 
 def load_system_prompt() -> str:
@@ -120,57 +120,108 @@ def load_system_prompt() -> str:
     )
 
 
-def load_dataset() -> dict:
-    if not DATA_PATH.exists():
-        raise FileNotFoundError(f"Dataset not found: {DATA_PATH}")
-    return json.loads(DATA_PATH.read_text(encoding="utf-8"))
-
-
 # ============================================================
-# AGENT BRIDGE: Local Agent Framework
+# AGENT BRIDGE: Azure AI Foundry Agent (existing agent id)
 # ============================================================
 
 
 class AgentBridge:
-    """Local Agent Framework bridge.
+    """Azure AI Foundry Agent bridge (uses an existing agent id)."""
 
-    Uses AzureAIClient locally (not Foundry Agent Service).
-    The agent answers based on the provided dataset.
-    """
-
-    def __init__(self, project_endpoint: str, model: str, instructions: str):
-        self.project_endpoint = project_endpoint
-        self.model = model
-        self.instructions = instructions
-        self._credential: Optional[AzureCliCredential] = None
-        self._client: Optional[AzureAIClient] = None
-        self._agent = None
+    def __init__(self, agent_endpoint: str, agent_id: str):
+        self.agent_endpoint = agent_endpoint
+        self.agent_id = agent_id
+        self._resolved_agent_id: Optional[str] = None
+        self._credential: Optional[DefaultAzureCredential] = None
+        self._client: Optional[AgentsClient] = None
+        self._thread_id: Optional[str] = None
 
     async def initialize(self):
-        self._credential = AzureCliCredential()
-        self._client = AzureAIClient(
+        self._credential = DefaultAzureCredential()
+        self._client = AgentsClient(
+            endpoint=self.agent_endpoint,
             credential=self._credential,
-            project_endpoint=self.project_endpoint,
-            model_deployment_name=self.model,
         )
-        self._agent = self._client.as_agent(instructions=self.instructions)
-        logger.info("Local Agent Framework initialized")
+        self._resolved_agent_id = self._resolve_agent_id(self.agent_id)
+        thread = self._client.threads.create()
+        self._thread_id = thread.id
+        logger.info(
+            "Foundry agent initialized: agent_id=%s thread=%s",
+            self._resolved_agent_id,
+            self._thread_id,
+        )
 
     async def process_message(self, user_text: str) -> str:
-        assert self._agent is not None
+        assert self._client is not None and self._thread_id is not None
 
-        dataset = load_dataset()
-        data_json = json.dumps(dataset, ensure_ascii=False, indent=2)
-        message = f"Nutzeranfrage: {user_text}\n\nDATEN (JSON):\n{data_json}"
+        def _run_blocking() -> str:
+            self._client.messages.create(
+                thread_id=self._thread_id,
+                role=MessageRole.USER,
+                content=user_text,
+            )
+            run = self._client.runs.create_and_process(
+                thread_id=self._thread_id,
+                agent_id=self._resolved_agent_id,
+            )
+            logger.info("Agent run completed: status=%s", run.status)
 
-        result = await self._agent.run(message)
-        response_text = getattr(result, "text", str(result))
+            if run.status == "failed":
+                logger.error("Agent run failed: %s", run.last_error)
+                return "Entschuldigung, es ist ein Fehler aufgetreten."
+
+            messages = self._client.messages.list(
+                thread_id=self._thread_id,
+                order=ListSortOrder.DESCENDING,
+            )
+            for msg in messages:
+                if msg.role == MessageRole.AGENT and msg.text_messages:
+                    return msg.text_messages[-1].text.value
+
+            return "Entschuldigung, ich konnte Ihre Anfrage nicht verarbeiten."
+
+        response_text = await asyncio.to_thread(_run_blocking)
         logger.info("Agent response: %s", response_text[:200])
         return response_text
 
     async def cleanup(self):
         if self._credential:
-            await self._credential.close()
+            self._credential.close()
+
+    def _resolve_agent_id(self, agent_ref: str) -> str:
+        """Resolve a human-friendly agent reference (e.g., name:version) to a real agent id."""
+        if not self._client:
+            return agent_ref
+
+        # Already a valid id (letters/numbers/underscore/dash)
+        if re.fullmatch(r"[A-Za-z0-9_-]+", agent_ref):
+            return agent_ref
+
+        name, _, version = agent_ref.partition(":")
+        try:
+            agents = list(self._client.list_agents(limit=100))
+        except Exception:
+            logger.exception("Failed to list agents for resolving id")
+            return agent_ref
+
+        matches = [a for a in agents if getattr(a, "name", None) == name]
+        if version:
+            versioned = []
+            for a in matches:
+                meta = getattr(a, "metadata", {}) or {}
+                if meta.get("version") == version or meta.get("agent_version") == version:
+                    versioned.append(a)
+            if versioned:
+                matches = versioned
+
+        if not matches:
+            logger.warning("No agent found with name=%s; using raw id %s", name, agent_ref)
+            return agent_ref
+
+        matches.sort(key=lambda a: getattr(a, "created_at", 0), reverse=True)
+        resolved = matches[0].id
+        logger.info("Resolved agent reference %s -> %s", agent_ref, resolved)
+        return resolved
 
 
 # ============================================================
@@ -329,12 +380,11 @@ class AudioProcessor:
 class AgentVoiceAssistant:
     """
     Voice assistant where VoiceLive handles audio (STT/TTS) and the
-    local Agent Framework handles reasoning and response generation.
+    Azure AI Foundry Agent handles reasoning and response generation.
 
     Key difference from Step 1:
       - VoiceLive session has NO tools registered
-      - Transcription events trigger local agent calls
-      - Agent Framework uses the local dataset to answer
+      - Transcription events trigger Foundry agent calls
       - Agent response is injected back for TTS
     """
 
@@ -344,19 +394,18 @@ class AgentVoiceAssistant:
         voicelive_credential: Union[AzureKeyCredential, AsyncTokenCredential],
         voicelive_model: str,
         voice: str,
-        project_endpoint: str,
-        model_deployment: str,
+        agent_endpoint: str,
+        agent_id: str,
     ):
         self.voicelive_endpoint = voicelive_endpoint
         self.voicelive_credential = voicelive_credential
         self.voicelive_model = voicelive_model
         self.voice = voice
 
-        # Local Agent Framework bridge
+        # Foundry Agent bridge
         self.agent_bridge = AgentBridge(
-            project_endpoint=project_endpoint,
-            model=model_deployment,
-            instructions=load_system_prompt(),
+            agent_endpoint=agent_endpoint,
+            agent_id=agent_id,
         )
 
         # VoiceLive instructions: minimal, just acknowledge and wait
@@ -388,10 +437,10 @@ WICHTIG:
         self._processing_lock = asyncio.Lock()
 
     async def start(self):
-        """Starts the Voice Assistant with local Agent Framework."""
+        """Starts the Voice Assistant with Foundry Agent."""
         try:
-            # Initialize the local Agent Framework
-            print("Initializing local Agent Framework...")
+            # Initialize the Foundry Agent client
+            print("Initializing Foundry Agent...")
             await self.agent_bridge.initialize()
 
             logger.info("Connecting to VoiceLive API...")
@@ -412,8 +461,8 @@ WICHTIG:
                 )
 
                 print("\n" + "=" * 60)
-                print("STEP 2: VOICE LIVE + LOCAL AGENT FRAMEWORK")
-                print("VoiceLive handles audio. Local agent handles reasoning.")
+                print("STEP 2: VOICE LIVE + FOUNDRY AGENT")
+                print("VoiceLive handles audio. Foundry agent handles reasoning.")
                 print("Speak into your microphone. Press Ctrl+C to exit.")
                 print("=" * 60 + "\n")
 
@@ -437,7 +486,7 @@ WICHTIG:
         )
 
         # NOTE: No tools registered here! VoiceLive is audio-only.
-        # The local Agent Framework handles all reasoning.
+        # The Foundry agent handles all reasoning.
         session_config = RequestSession(
             modalities=[Modality.TEXT, Modality.AUDIO],
             instructions=self.instructions,
@@ -452,7 +501,7 @@ WICHTIG:
                 type="azure_deep_noise_suppression"
             ),
             # Transcription is critical: this is how we get the user's text
-            # to send to the local agent
+            # to send to the Foundry agent
             input_audio_transcription=AudioInputTranscriptionOptions(model="azure-speech"),
         )
 
@@ -466,8 +515,10 @@ WICHTIG:
 
     async def _handle_event(self, event):
         """Event handler -- listens for transcription to trigger agent calls."""
+        logger.debug("Event received: %s", event.type)
         ap = self.audio_processor
         conn = self.connection
+        handled_transcript = False
 
         if event.type == ServerEventType.SESSION_UPDATED:
             logger.info("Session ready")
@@ -513,46 +564,55 @@ WICHTIG:
         # ============================================================
         # THIS IS THE KEY EVENT: User's speech has been transcribed.
         # Instead of letting VoiceLive handle tool calls (Step 1),
-        # we send the transcript to the local agent.
+        # we send the transcript to the Foundry agent.
         # ============================================================
         elif event.type == ServerEventType.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED:
-            transcript = event.transcript
-            if transcript and transcript.strip():
-                print(f"[Transcript: {transcript.strip()}]")
-                logger.info("Transcription: %s", transcript.strip())
-                self._resume_after_barge_in = False
-
-                # Send to agent in background
-                self._query_counter += 1
-                query_id = f"agent_{self._query_counter}"
-
-                pending = PendingQuery(
-                    query_id=query_id,
-                    state=QueryState.RUNNING,
-                )
-                pending.task = asyncio.create_task(
-                    self._process_with_agent(query_id, transcript.strip())
-                )
-                self.pending_queries[query_id] = pending
-            else:
-                if self._resume_after_barge_in:
-                    logger.info("Empty transcript after barge-in, requesting response replay")
-                    self._resume_after_barge_in = False
-                    if not self._active_response:
-                        await conn.response.create()
-                    else:
-                        self._pending_response_request = True
+            handled_transcript = True
+            await self._handle_transcript_event(event.transcript)
 
         elif event.type == ServerEventType.ERROR:
             if "no active response" not in event.error.message.lower():
                 logger.error(f"Error: {event.error.message}")
+
+        # Fallback: if SDK event types change, still handle transcript
+        if not handled_transcript:
+            transcript = getattr(event, "transcript", None)
+            if transcript:
+                await self._handle_transcript_event(transcript)
+
+    async def _handle_transcript_event(self, transcript: str | None) -> None:
+        if transcript and transcript.strip():
+            print(f"[Transcript: {transcript.strip()}]")
+            logger.info("Transcription: %s", transcript.strip())
+            self._resume_after_barge_in = False
+
+            # Send to agent in background
+            self._query_counter += 1
+            query_id = f"agent_{self._query_counter}"
+
+            pending = PendingQuery(
+                query_id=query_id,
+                state=QueryState.RUNNING,
+            )
+            pending.task = asyncio.create_task(
+                self._process_with_agent(query_id, transcript.strip())
+            )
+            self.pending_queries[query_id] = pending
+        else:
+            if self._resume_after_barge_in:
+                logger.info("Empty transcript after barge-in, requesting response replay")
+                self._resume_after_barge_in = False
+                if not self._active_response:
+                    await self.connection.response.create()
+                else:
+                    self._pending_response_request = True
 
     # ================================================================
     # AGENT PROCESSING
     # ================================================================
 
     async def _process_with_agent(self, query_id: str, transcript: str):
-        """Sends transcript to the local agent and stores the response."""
+        """Sends transcript to the Foundry agent and stores the response."""
         try:
             async with self._processing_lock:
                 logger.info(f"[{query_id}] Sending to agent: {transcript}")
@@ -642,18 +702,27 @@ def main():
         os.environ.get("USE_TOKEN_CREDENTIAL", "false").lower() == "true"
     )
 
-    # Local Agent Framework config
+    # Foundry Agent config (existing agent id)
+    agent_id = os.environ.get("AZURE_EXISTING_AGENT_ID") or DEFAULT_AGENT_ID
     project_endpoint = (
-        os.environ.get("AZURE_AI_PROJECT_ENDPOINT")
-        or os.environ.get("AZURE_EXISTING_AIPROJECT_ENDPOINT")
-        or DEFAULT_PROJECT_ENDPOINT
+        os.environ.get("AZURE_EXISTING_AIPROJECT_ENDPOINT")
+        or os.environ.get("AZURE_AI_PROJECT_ENDPOINT")
     )
-    model_deployment = (
-        os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME")
-        or os.environ.get("MODEL_DEPLOYMENT_NAME")
-        or os.environ.get("AZURE_AGENT_MODEL")
-        or DEFAULT_MODEL_DEPLOYMENT
-    )
+    agent_endpoint = project_endpoint
+    if not agent_endpoint:
+        base_endpoint = (
+            os.environ.get("AZURE_AGENT_ENDPOINT")
+            or os.environ.get("AZURE_FOUNDRY_ENDPOINT")
+            or os.environ.get("AZURE_VOICELIVE_ENDPOINT")
+        )
+        project_name = (
+            os.environ.get("AZURE_AGENT_PROJECT")
+            or os.environ.get("AZURE_VOICELIVE_PROJECT_NAME")
+        )
+        if base_endpoint and project_name:
+            agent_endpoint = f"{base_endpoint.rstrip('/')}/api/projects/{project_name}"
+    if not agent_endpoint:
+        agent_endpoint = DEFAULT_AGENT_ENDPOINT
 
     # Validate Voice Live config
     if not voicelive_endpoint:
@@ -666,15 +735,13 @@ def main():
         use_token_credential = True
         logger.info("No API key provided; using Azure CLI token credential")
 
-    # Validate local Agent Framework config
-    if not project_endpoint:
-        print("ERROR: AZURE_AI_PROJECT_ENDPOINT is not set.")
-        print("Set AZURE_AI_PROJECT_ENDPOINT or AZURE_EXISTING_AIPROJECT_ENDPOINT.")
+    # Validate Foundry Agent config
+    if not agent_endpoint:
+        print("ERROR: Foundry project endpoint is not set.")
+        print("Set AZURE_EXISTING_AIPROJECT_ENDPOINT or AZURE_AGENT_ENDPOINT + AZURE_AGENT_PROJECT.")
         sys.exit(1)
-
-    if not model_deployment:
-        print("ERROR: AZURE_AI_MODEL_DEPLOYMENT_NAME is not set.")
-        print("Set AZURE_AI_MODEL_DEPLOYMENT_NAME or MODEL_DEPLOYMENT_NAME.")
+    if not agent_id:
+        print("ERROR: AZURE_EXISTING_AGENT_ID is not set.")
         sys.exit(1)
 
     voicelive_credential = (
@@ -692,9 +759,9 @@ def main():
         bool(voicelive_api_key),
     )
     logger.info(
-        "Local agent config: project_endpoint=%s model=%s",
-        project_endpoint,
-        model_deployment,
+        "Foundry agent config: endpoint=%s agent_id=%s",
+        agent_endpoint,
+        agent_id,
     )
 
     assistant = AgentVoiceAssistant(
@@ -702,8 +769,8 @@ def main():
         voicelive_credential=voicelive_credential,
         voicelive_model=voicelive_model,
         voice=voice,
-        project_endpoint=project_endpoint,
-        model_deployment=model_deployment,
+        agent_endpoint=agent_endpoint,
+        agent_id=agent_id,
     )
 
     def signal_handler(_sig, _frame):

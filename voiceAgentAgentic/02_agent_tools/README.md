@@ -1,8 +1,6 @@
-# Step 2: Voice Live with Local Agent Framework
+# Step 2: Voice Live with Azure AI Foundry Agent (Existing Agent ID)
 
-In this step, **VoiceLive handles only audio** (speech-to-text and text-to-speech). A **local Agent Framework** agent handles reasoning and generates responses from a **local JSON dataset**.
-
-This keeps the audio pipeline in Azure, but removes the cloud Agent Service from the loop.
+In this step, **VoiceLive handles only audio** (speech-to-text and text-to-speech). The **Azure AI Foundry Agent** handles reasoning and returns the response. We **do not create** a new agent; we call an **existing agent ID**.
 
 ---
 
@@ -14,8 +12,7 @@ sequenceDiagram
     participant U as User
     participant VL as VoiceLive<br/>(Audio Only)
     participant Code as Your Code
-    participant Agent as Local Agent Framework
-    participant Data as Local Data<br/>(JSON)
+    participant Agent as Foundry Agent<br/>(Existing ID)
 
     U->>VL: "Where is my order?"
     VL->>VL: STT (Azure Speech)
@@ -24,8 +21,7 @@ sequenceDiagram
     Code->>VL: Inject filler message
     VL->>U: "One moment please..."
 
-    Code->>Agent: run(message + dataset)
-    Agent->>Data: read orders/customers
+    Code->>Agent: runs.create_and_process(thread, agent_id)
     Agent-->>Code: "Your order ORD-5001 is in transit..."
 
     Note over Code: Background checker detects result
@@ -39,38 +35,47 @@ sequenceDiagram
 
 ## What Changed from Step 1
 
-| Aspect | Step 1 | Step 2 (Local Agent) |
+| Aspect | Step 1 | Step 2 (Foundry Agent) |
 |--------|--------|--------|
 | VoiceLive session tools | 8 FunctionTool schemas | **None** |
 | VoiceLive session instructions | Full agent personality | Minimal ("acknowledge and wait") |
 | Event that triggers logic | `FUNCTION_CALL` | **`TRANSCRIPTION_COMPLETED`** |
-| Reasoning | Local Python tool dispatch | **Local Agent Framework + JSON data** |
-| New dependency | -- | **`agent-framework` (pre-release)** |
-| Conversation memory | VoiceLive session | **Stateless (per request)** |
+| Reasoning | Local Python tool dispatch | **Foundry Agent (existing ID)** |
+| New dependency | -- | **`azure-ai-agents`** |
+| Conversation memory | VoiceLive session | **Foundry Agent thread** |
 
-## Local Agent Framework Flow
+## Foundry Agent Flow
 
 ```python
-from agent_framework.azure import AzureAIClient
+from azure.ai.agents import AgentsClient
+from azure.ai.agents.models import MessageRole
+from azure.identity import DefaultAzureCredential
 
-client = AzureAIClient(
-    credential=AzureCliCredential(),
-    project_endpoint=project_endpoint,
-    model_deployment_name=model_deployment,
+client = AgentsClient(
+    endpoint=agent_endpoint,
+    credential=DefaultAzureCredential(),
 )
-agent = client.as_agent(instructions=system_prompt)
+thread = client.threads.create()
 
-result = await agent.run(message_with_dataset)
+client.messages.create(
+    thread_id=thread.id,
+    role=MessageRole.USER,
+    content=user_text,
+)
+
+run = client.runs.create_and_process(
+    thread_id=thread.id,
+    agent_id=agent_id,
+)
 ```
 
 ## Setup
 
 ```bash
 cd voiceAgentAgentic
-cp .env.example .env   # fill in ALL credentials (Voice Live + AI project)
+cp .env.example .env   # fill in VoiceLive + Foundry Agent values
 
 pip install -r requirements.txt
-pip install --pre agent-framework
 
 az login
 
@@ -84,15 +89,14 @@ python main.py
 |---|---|
 | `AZURE_VOICELIVE_ENDPOINT` | Voice Live API endpoint |
 | `AZURE_VOICELIVE_API_KEY` | Voice Live API key (or use token auth) |
+| `AZURE_EXISTING_AGENT_ID` | Existing Foundry agent ID |
+| `AZURE_EXISTING_AIPROJECT_ENDPOINT` | Foundry **project** endpoint |
 
-**Optional overrides (only if you want to change the defaults):**
-- `AZURE_AI_PROJECT_ENDPOINT` or `AZURE_EXISTING_AIPROJECT_ENDPOINT`
-- `AZURE_AI_MODEL_DEPLOYMENT_NAME` or `MODEL_DEPLOYMENT_NAME`
+**Fallbacks supported:**
+- `AZURE_AGENT_ENDPOINT` + `AZURE_AGENT_PROJECT` (used to build project endpoint)
 
 ## What to Notice
 
 - VoiceLive is **audio-only** in this step
-- The agent runs locally and reads `data/orders.json`
-- No cloud agent is created or managed
-- A `processing_lock` prevents concurrent agent calls
+- We call an **existing Foundry agent** (no creation/deletion)
 - The result is injected via a user message with a prefix (no pre-generated assistant message)
