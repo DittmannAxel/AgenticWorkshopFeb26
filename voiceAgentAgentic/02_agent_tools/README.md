@@ -1,6 +1,6 @@
-# Step 2: Voice Live with Azure AI Foundry Agent (Existing Agent ID)
+# Step 2: Voice Live + Foundry Agent (VoiceLive calls the agent)
 
-In this step, **VoiceLive handles only audio** (speech-to-text and text-to-speech). The **Azure AI Foundry Agent** handles reasoning and returns the response. We **do not create** a new agent; we call an **existing agent ID**.
+In this step, **VoiceLive handles audio** (STT/TTS) and **calls an existing Foundry agent** directly. Your code does **not** create agents or run the Agent SDK manually.
 
 ---
 
@@ -10,73 +10,23 @@ In this step, **VoiceLive handles only audio** (speech-to-text and text-to-speec
 sequenceDiagram
     autonumber
     participant U as User
-    participant VL as VoiceLive<br/>(Audio Only)
-    participant Code as Your Code
-    participant Agent as Foundry Agent<br/>(Existing ID)
+    participant VL as VoiceLive
+    participant Agent as Foundry Agent
 
-    U->>VL: "Where is my order?"
+    U->>VL: Speak
     VL->>VL: STT (Azure Speech)
-    VL->>Code: TRANSCRIPTION_COMPLETED
-
-    Code->>VL: Inject filler message
-    VL->>U: "One moment please..."
-
-    Code->>Agent: runs.create_and_process(thread, agent_id)
-    Agent-->>Code: "Your order ORD-5001 is in transit..."
-
-    Note over Code: Background checker detects result
-
-    Code->>Code: skip_pending_audio()
-    Code->>VL: response.cancel()
-    Code->>VL: conversation.item.create<br/>(role: user, prefixed)
-    Code->>VL: response.create()
-    VL->>U: "Your order ORD-5001 is in transit..."
-```
-
-## What Changed from Step 1
-
-| Aspect | Step 1 | Step 2 (Foundry Agent) |
-|--------|--------|--------|
-| VoiceLive session tools | 8 FunctionTool schemas | **None** |
-| VoiceLive session instructions | Full agent personality | Minimal ("acknowledge and wait") |
-| Event that triggers logic | `FUNCTION_CALL` | **`TRANSCRIPTION_COMPLETED`** |
-| Reasoning | Local Python tool dispatch | **Foundry Agent (existing ID)** |
-| New dependency | -- | **`azure-ai-agents`** |
-| Conversation memory | VoiceLive session | **Foundry Agent thread** |
-
-## Foundry Agent Flow
-
-```python
-from azure.ai.agents import AgentsClient
-from azure.ai.agents.models import MessageRole
-from azure.identity import DefaultAzureCredential
-
-client = AgentsClient(
-    endpoint=agent_endpoint,
-    credential=DefaultAzureCredential(),
-)
-thread = client.threads.create()
-
-client.messages.create(
-    thread_id=thread.id,
-    role=MessageRole.USER,
-    content=user_text,
-)
-
-run = client.runs.create_and_process(
-    thread_id=thread.id,
-    agent_id=agent_id,
-)
+    VL->>Agent: Run agent (agent-id)
+    Agent-->>VL: Response text
+    VL->>U: TTS response
 ```
 
 ## Setup
 
 ```bash
 cd voiceAgentAgentic
-cp .env.example .env   # fill in VoiceLive + Foundry Agent values
+cp .env.example .env   # fill in VoiceLive + Agent settings
 
 pip install -r requirements.txt
-
 az login
 
 cd 02_agent_tools
@@ -87,16 +37,15 @@ python main.py
 
 | Variable | Purpose |
 |---|---|
-| `AZURE_VOICELIVE_ENDPOINT` | Voice Live API endpoint |
-| `AZURE_VOICELIVE_API_KEY` | Voice Live API key (or use token auth) |
-| `AZURE_EXISTING_AGENT_ID` | Existing Foundry agent ID |
-| `AZURE_EXISTING_AIPROJECT_ENDPOINT` | Foundry **project** endpoint |
+| `AZURE_VOICELIVE_ENDPOINT` | VoiceLive endpoint |
+| `AZURE_VOICELIVE_AGENT_ID` | Existing Foundry agent ID (e.g. asst_...) |
+| `AZURE_VOICELIVE_PROJECT_NAME` | Foundry project name |
+| `AZURE_VOICELIVE_VOICE` | Voice name (optional) |
+| `AZURE_VOICELIVE_API_KEY` | API key (optional if using token) |
+| `USE_TOKEN_CREDENTIAL` | `true` to use Azure CLI auth |
 
-**Fallbacks supported:**
-- `AZURE_AGENT_ENDPOINT` + `AZURE_AGENT_PROJECT` (used to build project endpoint)
+## Notes
 
-## What to Notice
-
-- VoiceLive is **audio-only** in this step
-- We call an **existing Foundry agent** (no creation/deletion)
-- The result is injected via a user message with a prefix (no pre-generated assistant message)
+- VoiceLive uses `agent-id`, `agent-project-name`, and an `agent-access-token` to invoke the agent.
+- The agent must already exist in Foundry.
+- If you only have the **agent name**, you must still provide the **agent ID** (usually `asst_...`).
