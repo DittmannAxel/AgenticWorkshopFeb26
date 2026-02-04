@@ -1,12 +1,12 @@
 # -------------------------------------------------------------------------
-# Voice Module - Real-time voice with non-blocking LangGraph integration
+# Voice Module - Real-time voice with a non-blocking bridge
 # -------------------------------------------------------------------------
 """
-Voice module providing real-time voice conversation capabilities with
-non-blocking LangGraph agent integration.
+Voice module providing real-time voice conversation capabilities with a
+non-blocking bridge for background lookups.
 
 Architecture:
-    VoiceService (Azure VoiceLive) ←→ VoiceAgentBridge ←→ LangGraph Agent
+    VoiceService (Azure VoiceLive) ←→ VoiceAgentBridge ←→ Backend Agent
     
     - Voice conversations happen in real-time
     - Data queries spawn background agent tasks
@@ -19,7 +19,7 @@ Components:
         speech-to-speech conversations.
         
     VoiceAgentBridge
-        Non-blocking bridge between voice and LangGraph agent.
+        Non-blocking bridge between voice and a backend agent.
         Routes queries, manages background tasks, injects results.
         
     QueryClassifier
@@ -35,31 +35,23 @@ Components:
         Simple CLI voice assistant without agent integration.
 
 Usage:
-    # For Chainlit integration (see app/src/cl_voice_app.py)
-    from voice.src.voice_service import VoiceService, VoiceServiceConfig
-    from voice.src.voice_agent_bridge import VoiceAgentBridge, BridgeConfig
-    
-    # For CLI usage
-    python voice/main_agent.py --endpoint <url> --use-token-credential
+    python main_agent.py --endpoint <url> --use-token-credential
 """
 
-# Core voice service
-from voice.src.voice_service import (
+from .voice_service import (
     VoiceService,
     VoiceServiceConfig,
     VoiceEvent,
     VoiceEventType,
 )
 
-# Voice-Agent bridge
-from voice.src.voice_agent_bridge import (
+from .voice_agent_bridge import (
     VoiceAgentBridge,
     VoiceAgentBridgeBuilder,
     BridgeConfig,
 )
 
-# Query classification
-from voice.src.query_classifier import (
+from .query_classifier import (
     QueryClassifier,
     KeywordClassifier,
     ClassifierConfig,
@@ -68,8 +60,7 @@ from voice.src.query_classifier import (
     create_classifier,
 )
 
-# Task management
-from voice.src.pending_task_manager import (
+from .pending_task_manager import (
     PendingTaskManager,
     TaskManagerConfig,
     PendingTask,
@@ -77,8 +68,10 @@ from voice.src.pending_task_manager import (
     TaskStatus,
 )
 
-# Basic assistant (CLI without agent)
-from voice.src.basic_voice_assistant import BasicVoiceAssistant
+from .basic_voice_assistant import BasicVoiceAssistant
+
+from .order_agent import OrderAgent
+from .order_backend import MockOrderBackend, HttpOrderBackend
 
 __all__ = [
     # Voice service
@@ -105,4 +98,7 @@ __all__ = [
     "TaskStatus",
     # Assistants
     "BasicVoiceAssistant",
+    "OrderAgent",
+    "MockOrderBackend",
+    "HttpOrderBackend",
 ]

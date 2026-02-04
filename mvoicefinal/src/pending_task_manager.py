@@ -20,7 +20,7 @@ from enum import Enum
 from typing import Optional, Callable, Awaitable, Any, Coroutine
 from uuid import uuid4
 
-from voice.src.set_logging import logger
+from src.set_logging import logger
 
 
 class TaskStatus(str, Enum):

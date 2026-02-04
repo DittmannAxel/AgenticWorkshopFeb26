@@ -3,14 +3,14 @@
 # Licensed under the MIT License.
 # -------------------------------------------------------------------------
 """
-Voice-Agent Bridge - Non-blocking integration between VoiceService and LangGraph.
+Voice-Agent Bridge - Non-blocking integration between VoiceService and a backend agent.
 
 This module provides the core bridge that enables real-time voice conversations
 to continue while LangGraph agent processes tool calls in the background.
 Results are injected back into the voice session when ready.
 
 Architecture:
-    VoiceService (real-time) ←→ VoiceAgentBridge ←→ LangGraph Agent (background)
+    VoiceService (real-time) ←→ VoiceAgentBridge ←→ Agent/Backend (background)
     
     1. Voice transcribes user speech
     2. Bridge classifies query (simple vs data lookup)
@@ -26,24 +26,22 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Optional, Callable, Awaitable, Any
 
-from langchain_core.messages import HumanMessage, AIMessage
-from langchain_core.runnables.config import RunnableConfig
-
-from voice.src.voice_service import VoiceService, VoiceEvent, VoiceEventType
-from voice.src.query_classifier import (
+from src.voice_service import VoiceService, VoiceEvent, VoiceEventType
+from src.query_classifier import (
     QueryClassifier, 
     KeywordClassifier, 
     ClassifierConfig,
     QueryType,
     ClassificationResult,
 )
-from voice.src.pending_task_manager import (
+from src.pending_task_manager import (
     PendingTaskManager,
     TaskManagerConfig,
     TaskResult,
     TaskStatus,
 )
-from voice.src.set_logging import logger
+from src.set_logging import logger
+from src.order_agent import OrderAgent, OrderAgentActionType, OrderLookupRequest
 
 
 @dataclass
@@ -92,6 +90,9 @@ In the meantime, is there anything else I can help you with?
 I encountered an issue looking up that information about "{query}".
 Could you try asking in a different way, or let me know if there's something else I can help with?
 """
+
+    # Optional: called right before we speak an injected result (lets the UI stop playback).
+    interrupt_playback: Optional[Callable[[], Awaitable[None]]] = None
 
 
 # Callback types for external handlers
@@ -282,16 +283,54 @@ class VoiceAgentBridge:
         """Process a user transcript and potentially spawn agent task."""
         # Classify the query
         result = self.classify_query(text)
+
+        # If the order agent previously asked for an identifier, treat the next user turn
+        # as data lookup even if the utterance is only "ORD-5001" or a plain name.
+        if isinstance(self.agent, OrderAgent) and self.agent.state.awaiting_identifier:
+            result = ClassificationResult(
+                query_type=QueryType.DATA_LOOKUP,
+                confidence=1.0,
+                reason="Awaiting order identifier",
+            )
         
         logger.info(
             f"Query classified as {result.query_type.value} "
             f"(confidence: {result.confidence:.2f}): {text[:50]}..."
         )
         
-        # Only spawn agent for data lookups
+        # For non-data queries, let VoiceLive handle response generation.
         if result.query_type != QueryType.DATA_LOOKUP:
+            await self.voice_service.request_response()
             return
-        
+
+        # For this demo, we expect an OrderAgent that handles:
+        # - missing identifier → ask user
+        # - identifier present → background lookup → speak result
+        if not isinstance(self.agent, OrderAgent):
+            await self.voice_service.request_response()
+            return
+
+        action = await self.agent.decide(text)
+
+        if action.type == OrderAgentActionType.PASS_THROUGH:
+            await self.voice_service.request_response()
+            return
+
+        if action.type == OrderAgentActionType.ASK_IDENTIFIER and action.say:
+            await self.voice_service.add_system_message(
+                f'User said: "{text}"\n\nAufgabe: Stellen Sie dem Kunden jetzt genau diese Frage:\n{action.say}'
+            )
+            await self.voice_service.request_response()
+            return
+
+        if action.type == OrderAgentActionType.LOOKUP and action.lookup:
+            # Immediate acknowledgement to keep the voice conversation snappy.
+            if action.say:
+                await self.voice_service.add_system_message(
+                    f'User said: "{text}"\n\nAufgabe: Sagen Sie dem Kunden kurz:\n{action.say}'
+                )
+                await self.voice_service.request_response()
+
         # Check capacity
         if not self.task_manager.can_accept_task:
             logger.warning(
@@ -299,28 +338,37 @@ class VoiceAgentBridge:
                 f"({self.pending_query_count}/{self.config.max_concurrent_queries})"
             )
             return
+
+            # Speak a concise “busy” message if we cannot lookup right now.
+            await self.voice_service.add_system_message(
+                f'User said: "{text}"\n\nAufgabe: Sagen Sie dem Kunden kurz: '
+                "Ich bin gerade mit einer anderen Abfrage beschäftigt. Bitte versuchen Sie es gleich noch einmal."
+            )
+            await self.voice_service.request_response()
+            return
         
-        # Spawn background agent task
-        await self._spawn_agent_task(text)
+        # Spawn background lookup task
+        await self._spawn_order_lookup_task(original_query=text, request=action.lookup)
+        return
     
-    async def _spawn_agent_task(self, query: str) -> None:
-        """Spawn a non-blocking agent task for the query."""
-        logger.info(f"Spawning agent task for: {query[:50]}...")
+    async def _spawn_order_lookup_task(self, original_query: str, request: OrderLookupRequest) -> None:
+        """Spawn a non-blocking order lookup task for the query."""
+        logger.info(f"Spawning order lookup task for: {original_query[:50]}...")
         
         # Notify external callback
         if self._on_agent_start:
             try:
-                await self._on_agent_start(query)
+                await self._on_agent_start(original_query)
             except Exception as e:
                 logger.error(f"Error in agent start callback: {e}")
         
-        # Create the agent coroutine
-        agent_coro = self._run_agent(query)
+        # Create the lookup coroutine
+        lookup_coro = self.agent.lookup(request)
         
         # Spawn via task manager (handles timeout, tracking)
         task_id = await self.task_manager.spawn(
-            query=query,
-            coroutine=agent_coro,
+            query=original_query,
+            coroutine=lookup_coro,
             timeout=self.config.agent_timeout,
         )
         
@@ -328,16 +376,6 @@ class VoiceAgentBridge:
             logger.info(f"Agent task {task_id} spawned for query")
         else:
             logger.warning("Failed to spawn agent task")
-    
-    async def _run_agent(self, query: str) -> dict:
-        """Run the LangGraph agent for a query."""
-        config = RunnableConfig(
-            configurable={"thread_id": self.thread_id}
-        )
-        return await self.agent.ainvoke(
-            {"messages": [HumanMessage(content=query)]},
-            config=config,
-        )
     
     async def _on_task_complete(
         self, 
@@ -349,11 +387,9 @@ class VoiceAgentBridge:
         if not result.success or not result.data:
             return
         
-        # Extract response from agent result
-        response = self._extract_agent_response(result.data)
-        
+        response = self._format_order_result(result.data)
         if not response:
-            logger.warning(f"No response extracted from agent result for task {task_id}")
+            logger.warning(f"No response formatted for task {task_id}")
             return
         
         logger.info(
@@ -361,9 +397,21 @@ class VoiceAgentBridge:
             f"injecting context"
         )
         
-        # Format and inject context
+        if self.config.interrupt_playback:
+            try:
+                await self.config.interrupt_playback()
+            except Exception:
+                logger.exception("interrupt_playback callback failed")
+
+        # Ask the model to speak the result now (create a new conversation item as trigger).
         context = self._format_context(query, response)
-        await self.voice_service.inject_context(context)
+        await self.voice_service.add_system_message(
+            "Zusatzkontext:\n"
+            f"{context}\n\n"
+            "Aufgabe: Erklären Sie dem Kunden kurz die Informationen aus dem Zusatzkontext "
+            "und fragen Sie am Ende knapp nach, ob Sie noch weiterhelfen können."
+        )
+        await self.voice_service.request_response(interrupt=True)
         
         # Notify external callback
         if self._on_agent_complete:
@@ -387,7 +435,11 @@ class VoiceAgentBridge:
         else:
             context = self.config.error_message.format(query=query[:50])
         
-        await self.voice_service.inject_context(context)
+        await self.voice_service.add_system_message(
+            f"{context}\n\nAufgabe: Entschuldigen Sie sich kurz und bitten Sie den Kunden, "
+            "die Bestellnummer oder seinen Namen noch einmal zu nennen."
+        )
+        await self.voice_service.request_response(interrupt=True)
         
         # Notify external callback
         if self._on_agent_error:
@@ -396,24 +448,47 @@ class VoiceAgentBridge:
             except Exception as e:
                 logger.error(f"Error in agent error callback: {e}")
     
-    def _extract_agent_response(self, agent_result: dict) -> Optional[str]:
-        """Extract the text response from agent result."""
-        messages = agent_result.get("messages", [])
-        
-        # Find the last AI message with content
-        for msg in reversed(messages):
-            if isinstance(msg, AIMessage) and msg.content:
-                # Handle string content
-                if isinstance(msg.content, str):
-                    return msg.content
-                # Handle list content (multimodal)
-                elif isinstance(msg.content, list):
-                    text_parts = [
-                        part.get("text", "") if isinstance(part, dict) else str(part)
-                        for part in msg.content
-                    ]
-                    return " ".join(filter(None, text_parts))
-        
+    def _format_order_result(self, data: Any) -> Optional[str]:
+        """Turn backend JSON into a short, voice-friendly summary string."""
+        if not isinstance(data, dict):
+            return str(data)
+
+        if data.get("found") is False:
+            err = data.get("error") or "Order not found."
+            return (
+                f"{err} Bitte nennen Sie mir Ihre Bestellnummer (z.B. ORD-5001) "
+                "oder Ihren Namen, damit ich es erneut prüfen kann."
+            )
+
+        # Order-by-id response.
+        if "id" in data and "status" in data:
+            status = data.get("status")
+            order_id = data.get("id")
+            eta = data.get("estimated_delivery")
+            window = data.get("delivery_window")
+            parts = [f"Bestellung {order_id}: Status {status}."]
+            if eta:
+                if window:
+                    parts.append(f"Voraussichtliche Lieferung {eta} zwischen {window}.")
+                else:
+                    parts.append(f"Voraussichtliche Lieferung {eta}.")
+            return " ".join(parts)
+
+        # Orders-by-customer response.
+        orders = data.get("orders")
+        if isinstance(orders, list):
+            if not orders:
+                name = data.get("customer_name") or "Ihrem Namen"
+                return f"Ich habe keine Bestellungen zu {name} gefunden. Können Sie mir eine Bestellnummer nennen?"
+            first = orders[0]
+            if isinstance(first, dict):
+                oid = first.get("id", "unknown")
+                status = first.get("status", "unknown")
+                return (
+                    f"Ich sehe eine Bestellung {oid} mit Status {status}. "
+                    "Wenn Sie eine andere Bestellnummer haben, sagen Sie sie mir bitte."
+                )
+
         return None
     
     def _format_context(self, query: str, response: str) -> str:

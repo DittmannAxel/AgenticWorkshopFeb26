@@ -54,32 +54,35 @@ uv sync
 
 ## Quick Start
 
-### Option 1: Chainlit Web Interface (Recommended)
-
-```bash
-# Run the voice-enabled Chainlit app
-chainlit run app/src/cl_voice_app.py
-```
-
-### Option 2: CLI with Agent Integration
+### Option 1: CLI with Order Agent (Recommended)
 
 ```bash
 # Using Azure CLI credential
-python voice/main_agent.py --endpoint <url> --use-token-credential
+python main_agent.py --endpoint <url> --use-token-credential
 
 # Using API key
-python voice/main_agent.py --api-key <key> --endpoint <url>
+python main_agent.py --api-key <key> --endpoint <url>
 ```
 
-### Option 3: Basic CLI (No Agent)
+### Option 2: Basic CLI (No Agent)
 
 ```bash
-python voice/main.py --api-key YOUR_API_KEY
+python main.py --api-key YOUR_API_KEY
 ```
 
+### Optional: Run a Local Mock Orders API
+
+```bash
+python -m src.mock_orders_api --port 8083
+python main_agent.py --endpoint <url> --use-token-credential --orders-service-url http://localhost:8083
+```
+	
 ## Environment Variables
 
 ```env
+# Create a local env file:
+#   cp .env.example .env
+#
 # Required: Azure VoiceLive
 AZURE_VOICELIVE_ENDPOINT=https://your-endpoint.services.ai.azure.com/
 AZURE_VOICELIVE_API_KEY=your-api-key  # Or use managed identity
@@ -92,6 +95,9 @@ AZURE_VOICELIVE_VOICE=en-US-Ava:DragonHDLatestNeural
 VOICE_AGENT_TIMEOUT=30
 VOICE_MAX_CONCURRENT_QUERIES=3
 VOICE_ENABLED=true
+
+# Optional: Order lookup backend (if unset, uses in-memory mock data)
+ORDERS_SERVICE_URL=http://localhost:8083
 ```
 
 ## Configuration Options
@@ -103,6 +109,7 @@ VOICE_ENABLED=true
 | `--model` | VoiceLive model | `gpt-realtime` |
 | `--voice` | Voice for the assistant | `en-US-Ava:DragonHDLatestNeural` |
 | `--instructions` | System instructions | Default helpful assistant prompt |
+| `--orders-service-url` | HTTP base URL for order lookup | `ORDERS_SERVICE_URL` env var |
 | `--use-token-credential` | Use Azure CLI credential | `false` |
 | `--verbose` | Enable verbose logging | `false` |
 

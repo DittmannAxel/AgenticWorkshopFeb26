@@ -30,44 +30,41 @@ import signal
 from pathlib import Path
 from typing import Union, Optional, cast
 
+from dotenv import load_dotenv
+
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 from azure.core.credentials import AzureKeyCredential
 from azure.core.credentials_async import AsyncTokenCredential
 from azure.identity.aio import AzureCliCredential
 import pyaudio
 
-from voice.src.voice_service import VoiceService, VoiceServiceConfig, VoiceEvent, VoiceEventType
-from voice.src.voice_agent_bridge import VoiceAgentBridge, BridgeConfig
-from voice.src.audio_processor import AudioProcessor
-from voice.src.set_logging import logger
+from src.voice_service import VoiceService, VoiceServiceConfig, VoiceEvent, VoiceEventType
+from src.voice_agent_bridge import VoiceAgentBridge, BridgeConfig
+from src.audio_processor import AudioProcessor
+from src.set_logging import logger
+from src.order_agent import OrderAgent
+from src.order_backend import MockOrderBackend, HttpOrderBackend
 
 
 # -------------------------------------------------------------------------
 # Voice Instructions for Agent Integration
 # -------------------------------------------------------------------------
 
-AGENT_VOICE_INSTRUCTIONS = """You are a helpful customer service AI assistant for DCC, a company that manages machines and customer data.
+AGENT_VOICE_INSTRUCTIONS = """Sie sind ein professioneller Kundenservice-Assistent.
 
-IMPORTANT BEHAVIORS:
-1. When users ask about customer data, machines, or addresses, the system will automatically look it up in the background.
-2. Acknowledge their request naturally: "Let me look that up" or "I'll check on that for you"
-3. Continue the conversation while waiting - you can ask clarifying questions or make small talk.
-4. When you receive "Additional context" with data, share it naturally. Summarize key points instead of reading everything.
-5. If the user has moved to a new topic, briefly mention you found the earlier information.
+WICHTIGE REGELN:
+1. Wenn der Kunde nach einer Bestellung fragt und keine Bestellnummer (z.B. ORD-5001) oder kein Name vorliegt, fragen Sie danach.
+2. Sobald Bestellnummer oder Name vorliegt, beantworten Sie die Frage anhand des Zusatzkontexts.
+3. Antworten Sie kurz und gut verständlich (Voice).
+4. Verwenden Sie die Sie-Form.
 
-VOICE CONVERSATION STYLE:
-- Keep responses concise (this is voice, not text)
-- Be conversational and friendly
-- Avoid long lists - summarize or offer to elaborate
-- Use natural speech patterns
-
-CAPABILITIES:
-- Look up customer information by ID or name
-- Find machine details and status
-- Retrieve address information
-- Search records and data"""
+STIL:
+- Freundlich, klar, keine langen Listen.
+- Wenn Sie etwas nicht finden, fragen Sie nach der Bestellnummer oder dem Namen.
+"""
 
 
 # -------------------------------------------------------------------------
@@ -76,7 +73,7 @@ CAPABILITIES:
 
 class AgentVoiceAssistant:
     """
-    CLI voice assistant with non-blocking LangGraph agent integration.
+    CLI voice assistant with a non-blocking backend lookup bridge.
     
     This assistant combines:
     - VoiceService for real-time speech (Azure VoiceLive)
@@ -92,6 +89,7 @@ class AgentVoiceAssistant:
         voice: str = "en-US-Ava:DragonHDLatestNeural",
         instructions: Optional[str] = None,
         agent_timeout: float = 30.0,
+        orders_service_url: Optional[str] = None,
     ):
         # Voice service config
         config = VoiceServiceConfig(
@@ -103,6 +101,7 @@ class AgentVoiceAssistant:
         
         self.voice_service = VoiceService(credential, config)
         self.agent_timeout = agent_timeout
+        self.orders_service_url = orders_service_url
         
         # Components initialized in start()
         self.audio_processor: Optional[AudioProcessor] = None
@@ -120,11 +119,11 @@ class AgentVoiceAssistant:
         try:
             logger.info("Starting AgentVoiceAssistant")
             
-            # Import and create agent
-            print("🤖 Loading LangGraph agent...")
-            from app.src.workflow.agent_workflow import get_agent
-            self.agent = await get_agent()
-            print(f"✅ Agent loaded with tools")
+            # Create deterministic order agent (no external LangGraph dependency)
+            orders_url = (self.orders_service_url or os.environ.get("ORDERS_SERVICE_URL") or "").strip()
+            backend = HttpOrderBackend(orders_url) if orders_url else MockOrderBackend()
+            self.agent = OrderAgent(backend)
+            print("✅ Order agent ready")
             
             # Start voice service
             print("🎤 Connecting to Azure VoiceLive...")
@@ -138,6 +137,7 @@ class AgentVoiceAssistant:
                 max_concurrent_queries=3,
                 agent_timeout=self.agent_timeout,
             )
+            bridge_config.interrupt_playback = self._interrupt_playback
             
             self.bridge = VoiceAgentBridge(
                 voice_service=self.voice_service,
@@ -163,8 +163,7 @@ class AgentVoiceAssistant:
             print("=" * 60)
             print("Features:")
             print("  • Real-time voice (Azure VoiceLive)")
-            print("  • Non-blocking data lookups (LangGraph agent)")
-            print("  • Databricks customer data tools")
+            print("  • Non-blocking order lookups (order id or name)")
             print("-" * 60)
             print("Start speaking to begin conversation")
             print("Press Ctrl+C to exit")
@@ -259,6 +258,11 @@ class AgentVoiceAssistant:
         )
         print(f"⚠️ Agent error for '{query[:30]}...': {error}")
 
+    async def _interrupt_playback(self) -> None:
+        """Stop queued audio immediately (so injected results are heard right away)."""
+        if self.audio_processor:
+            self.audio_processor.skip_pending_audio()
+
 
 # -------------------------------------------------------------------------
 # CLI Entry Point
@@ -267,7 +271,7 @@ class AgentVoiceAssistant:
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Agent Voice Assistant - Voice with LangGraph agent",
+        description="Agent Voice Assistant - Voice with order lookup agent",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     
@@ -304,6 +308,13 @@ def parse_arguments():
         help="Agent query timeout in seconds",
         type=float,
         default=float(os.environ.get("VOICE_AGENT_TIMEOUT", "30")),
+    )
+
+    parser.add_argument(
+        "--orders-service-url",
+        help="Optional HTTP base URL for order lookup (else uses in-memory mock).",
+        type=str,
+        default=os.environ.get("ORDERS_SERVICE_URL"),
     )
     
     parser.add_argument(
@@ -381,6 +392,7 @@ async def run_assistant(args) -> None:
         model=args.model,
         voice=args.voice,
         agent_timeout=args.timeout,
+        orders_service_url=args.orders_service_url,
     )
     
     # Setup signal handlers

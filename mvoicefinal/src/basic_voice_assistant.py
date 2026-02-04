@@ -16,9 +16,9 @@ from azure.core.credentials import AzureKeyCredential
 from azure.core.credentials_async import AsyncTokenCredential
 from dotenv import load_dotenv
 
-from voice.src.audio_processor import AudioProcessor
-from voice.src.voice_service import VoiceService, VoiceServiceConfig, VoiceEvent, VoiceEventType
-from voice.src.set_logging import logger
+from src.audio_processor import AudioProcessor
+from src.voice_service import VoiceService, VoiceServiceConfig, VoiceEvent, VoiceEventType
+from src.set_logging import logger
 
 
 # Environment variable loading
@@ -122,6 +122,10 @@ class BasicVoiceAssistant:
                 if transcript:
                     prefix = "👤 You:" if role == "user" else "🤖 Assistant:"
                     print(f"{prefix} {transcript}")
+
+                    # For the basic assistant, request a response for every user turn.
+                    if role == "user":
+                        await self.voice_service.request_response()
 
         elif event.type == VoiceEventType.ERROR:
             if event.data:

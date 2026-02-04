@@ -4,7 +4,7 @@ import queue
 from typing import Optional
 import pyaudio
 
-from voice.src.set_logging import logger
+from src.set_logging import logger
 
 
 class AudioProcessor:

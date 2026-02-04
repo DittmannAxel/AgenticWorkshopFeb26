@@ -3,12 +3,18 @@ import argparse
 import logging
 import sys
 import asyncio
+from pathlib import Path
 from typing import Union, cast
 import signal
 from azure.core.credentials import AzureKeyCredential
 from azure.core.credentials_async import AsyncTokenCredential
 from azure.identity.aio import AzureCliCredential
 import pyaudio
+
+from dotenv import load_dotenv
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 from src.basic_voice_assistant import BasicVoiceAssistant
 from src.set_logging import logger

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
-from voice.src.set_logging import logger
+from src.set_logging import logger
 
 
 class QueryType(str, Enum):
@@ -56,6 +56,7 @@ class ClassifierConfig:
         "status of", "history of",
         # Database/records
         "record", "records", "data", "database", "order", "orders",
+        "bestellung", "bestellungen",
         "product", "products", "inventory", "stock",
     ])
     
@@ -72,6 +73,7 @@ class ClassifierConfig:
     data_question_patterns: list[str] = field(default_factory=lambda: [
         r"^(what|which|where|when|how many|how much)\s+.*(customer|machine|address|order|product)",
         r"(customer|machine|address|order)\s*(id|number|#)?\s*\d+",
+        r"\bord[-\s]?\d{3,}\b",
         r"(find|search|lookup|get|show)\s+(me\s+)?(the\s+)?(customer|machine|address|data)",
         r"(information|details|data|status)\s+(about|for|on)\s+",
     ])
