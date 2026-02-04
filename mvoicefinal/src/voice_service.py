@@ -74,6 +74,7 @@ class VoiceServiceConfig:
     model: str = "gpt-realtime"
     voice: str = "en-US-Ava:DragonHDLatestNeural"
     instructions: str = "You are a helpful AI assistant."
+    temperature: float = 0.6
     
     # VAD settings
     vad_threshold: float = 0.5
@@ -389,6 +390,7 @@ class VoiceService:
             input_audio_transcription=AudioInputTranscriptionOptions(
                 model=self.config.transcription_model,
             ),
+            temperature=self.config.temperature,
         )
 
         # Add optional audio enhancements
@@ -401,7 +403,11 @@ class VoiceService:
 
         assert self._connection is not None
         await self._connection.session.update(session=session_config)
-        logger.info("Session configuration sent")
+        
+        # LOGGING VERIFICATION
+        ns_status = "ENABLED (azure_deep_noise_suppression)" if self.config.enable_noise_reduction else "DISABLED"
+        print(f"⚙️  Settings: Temp={self.config.temperature}, NoiseSuppression={ns_status}")
+        logger.info("Session config sent. Temp: %s, NoiseSuppression: %s", self.config.temperature, ns_status)
 
     async def _process_events(self) -> None:
         """Process events from the VoiceLive connection."""

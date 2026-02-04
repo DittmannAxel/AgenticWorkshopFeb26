@@ -27,6 +27,11 @@ import sys
 import argparse
 import asyncio
 import signal
+import certifi
+
+# Fix for macOS SSL certificate issues
+os.environ["SSL_CERT_FILE"] = certifi.where()
+
 from pathlib import Path
 from typing import Union, Optional, cast
 
@@ -86,10 +91,13 @@ class AgentVoiceAssistant:
         endpoint: str,
         credential: Union[AzureKeyCredential, AsyncTokenCredential],
         model: str = "gpt-realtime",
-        voice: str = "en-US-Ava:DragonHDLatestNeural",
+        voice: str = "de-DE-Seraphina:DragonHDLatestNeural",
         instructions: Optional[str] = None,
         agent_timeout: float = 30.0,
         orders_service_url: Optional[str] = None,
+        vad_threshold: float = 0.9,
+        vad_silence_ms: int = 800,
+        temperature: float = 0.6,
     ):
         # Voice service config
         config = VoiceServiceConfig(
@@ -97,6 +105,9 @@ class AgentVoiceAssistant:
             model=model,
             voice=voice,
             instructions=instructions or AGENT_VOICE_INSTRUCTIONS,
+            vad_threshold=vad_threshold,
+            vad_silence_duration_ms=vad_silence_ms,
+            temperature=temperature,
         )
         
         self.voice_service = VoiceService(credential, config)
@@ -300,7 +311,7 @@ def parse_arguments():
         "--voice",
         help="Voice to use",
         type=str,
-        default=os.environ.get("AZURE_VOICELIVE_VOICE", "en-US-Ava:DragonHDLatestNeural"),
+        default=os.environ.get("AZURE_VOICELIVE_VOICE", "de-DE-Seraphina:DragonHDLatestNeural"),
     )
     
     parser.add_argument(
@@ -328,6 +339,27 @@ def parse_arguments():
         "--verbose",
         help="Enable verbose logging",
         action="store_true",
+    )
+
+    parser.add_argument(
+        "--vad-threshold",
+        help="VAD threshold (0.0-1.0)",
+        type=float,
+        default=float(os.environ.get("AZURE_VOICELIVE_VAD_THRESHOLD", "0.9")),
+    )
+    
+    parser.add_argument(
+        "--vad-silence-ms",
+        help="VAD silence duration in ms",
+        type=int,
+        default=int(os.environ.get("AZURE_VOICELIVE_VAD_SILENCE_MS", "800")),
+    )
+    
+    parser.add_argument(
+        "--temperature",
+        help="Model temperature (0.6-1.0)",
+        type=float,
+        default=float(os.environ.get("AZURE_VOICELIVE_TEMPERATURE", "0.6")),
     )
     
     return parser.parse_args()
@@ -393,6 +425,9 @@ async def run_assistant(args) -> None:
         voice=args.voice,
         agent_timeout=args.timeout,
         orders_service_url=args.orders_service_url,
+        vad_threshold=args.vad_threshold,
+        vad_silence_ms=args.vad_silence_ms,
+        temperature=args.temperature,
     )
     
     # Setup signal handlers
@@ -426,7 +461,10 @@ def main():
     print("=" * 50)
     
     # Run
-    asyncio.run(run_assistant(args))
+    try:
+        asyncio.run(run_assistant(args))
+    except KeyboardInterrupt:
+        print("\n👋 Voice assistant shut down. Goodbye!")
 
 
 if __name__ == "__main__":
