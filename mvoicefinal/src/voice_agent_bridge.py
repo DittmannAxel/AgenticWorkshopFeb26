@@ -320,12 +320,15 @@ class VoiceAgentBridge:
             self._pending_function_call = None
 
             if name and call_id and self._order_backend:
-                await self._handle_function_call(
+                # MUST run as a background task — awaiting here would block
+                # the event loop and prevent RESPONSE_DONE from being
+                # processed, deadlocking the wait for _active_response.
+                asyncio.create_task(self._handle_function_call(
                     name=name,
                     call_id=call_id,
                     arguments=arguments,
                     previous_item_id=item_id,
-                )
+                ))
             return
 
         # --- Transcript-interception path (fallback when no tools) ---------
@@ -442,7 +445,33 @@ class VoiceAgentBridge:
         arguments: str,
         previous_item_id: Optional[str] = None,
     ) -> None:
-        """Handle a function call from VoiceLive (native tool use)."""
+        """Handle a function call from VoiceLive (native tool use).
+
+        This runs as a background task (``asyncio.create_task``) so it does
+        NOT block the event-processing loop.  That is critical — the wait
+        for ``_active_response`` to clear requires ``RESPONSE_DONE`` to be
+        processed by the event loop.
+        """
+        try:
+            await self._do_function_call(
+                name=name,
+                call_id=call_id,
+                arguments=arguments,
+                previous_item_id=previous_item_id,
+            )
+        except Exception as exc:
+            logger.exception("Function-call task crashed")
+            print(f"[Bridge] FATAL: function-call task crashed: {exc!r}")
+
+    async def _do_function_call(
+        self,
+        name: str,
+        call_id: str,
+        arguments: str,
+        previous_item_id: Optional[str] = None,
+    ) -> None:
+        """Full function-call lifecycle: wait → ack → lookup → inject result."""
+        assert self._order_backend is not None
         logger.info("Function call: %s(%s)", name, arguments)
         print(f"[Bridge] Handling function call: {name}({arguments})")
 
@@ -453,111 +482,80 @@ class VoiceAgentBridge:
             except Exception as e:
                 logger.error("Error in agent start callback: %s", e)
 
-        # 1. Send immediate acknowledgement so the model can speak a filler
+        # ---- 0. Wait for the response that produced this function call ----
+        # FUNCTION_CALL_ARGUMENTS_DONE fires before RESPONSE_DONE, so the
+        # server still considers a response active.  We must wait.
+        if self.voice_service._active_response:
+            print("[Bridge] Step 0: Waiting for function-call response to finish...")
+            for i in range(50):  # 50 × 100 ms = 5 s
+                if not self.voice_service._active_response:
+                    print(f"[Bridge] Step 0: Response finished after {(i+1)*100}ms")
+                    break
+                await asyncio.sleep(0.1)
+            else:
+                print("[Bridge] Step 0: WARNING — timed out, forcing _active_response=False")
+                self.voice_service._active_response = False
+
+        # ---- 1. Send immediate ack so the model speaks a filler ----
         ack = json.dumps({"status": "searching", "message": "Abfrage gestartet, Ergebnis folgt."})
-        print(f"[Bridge] Step 1: Sending immediate ack -> model will speak filler")
+        print("[Bridge] Step 1: Sending immediate ack -> model will speak filler")
         await self.voice_service.send_function_call_output(
             call_id=call_id, output=ack, previous_item_id=previous_item_id,
         )
         await self.voice_service.request_response()
 
-        # 2. Execute the real lookup in a background task
-        print(f"[Bridge] Step 2: Spawning background task for {name}")
-        asyncio.create_task(
-            self._execute_function_call_in_background(
-                name=name,
-                call_id=call_id,
-                arguments=arguments,
-                previous_item_id=previous_item_id,
-            )
-        )
-
-    async def _execute_function_call_in_background(
-        self,
-        name: str,
-        call_id: str,
-        arguments: str,
-        previous_item_id: Optional[str] = None,
-    ) -> None:
-        """Run the actual backend lookup and send the real result."""
-        try:
-            await self._do_function_call_lookup(
-                name=name,
-                call_id=call_id,
-                arguments=arguments,
-                previous_item_id=previous_item_id,
-            )
-        except Exception as exc:
-            # Catch-all so the background task never dies silently
-            logger.exception("Background function-call task crashed")
-            print(f"[Bridge-BG] FATAL: background task crashed: {exc!r}")
-
-    async def _do_function_call_lookup(
-        self,
-        name: str,
-        call_id: str,
-        arguments: str,
-        previous_item_id: Optional[str] = None,
-    ) -> None:
-        """Inner implementation — called inside a top-level try/except."""
-        assert self._order_backend is not None
-        print(f"[Bridge-BG] Starting backend lookup: {name}({arguments})")
-
-        # ---- 1. Execute backend call ----
+        # ---- 2. Execute the real backend lookup ----
+        print(f"[Bridge] Step 2: Backend lookup: {name}({arguments})")
         try:
             args = json.loads(arguments) if arguments else {}
             result: Any
 
             if name == "get_order_status":
                 order_id = args.get("order_id", "")
-                print(f"[Bridge-BG] -> get_order_status(order_id={order_id!r})")
+                print(f"[Bridge] -> get_order_status(order_id={order_id!r})")
                 result = await self._order_backend.get_order_status(order_id)
             elif name == "find_orders_by_customer_name":
                 customer_name = args.get("customer_name", "")
-                print(f"[Bridge-BG] -> find_recent_orders_by_customer_name(customer_name={customer_name!r})")
+                print(f"[Bridge] -> find_orders_by_customer_name(customer_name={customer_name!r})")
                 orders = await self._order_backend.find_recent_orders_by_customer_name(customer_name)
                 result = {"found": bool(orders), "orders": orders, "customer_name": customer_name}
             elif name == "list_all_orders":
-                print("[Bridge-BG] -> list_orders()")
+                print("[Bridge] -> list_orders()")
                 orders = await self._order_backend.list_orders()
                 result = {"found": bool(orders), "orders": orders}
             else:
-                print(f"[Bridge-BG] -> Unknown function: {name}")
+                print(f"[Bridge] -> Unknown function: {name}")
                 result = {"error": f"Unknown function: {name}"}
 
             result_text = json.dumps(result, ensure_ascii=False, default=str)
             logger.info("Function call %s completed: %s", name, result_text[:200])
-            print(f"[Bridge-BG] Backend result ({len(result_text)} chars): {result_text[:150]}...")
+            print(f"[Bridge] Backend result ({len(result_text)} chars): {result_text[:150]}...")
 
         except Exception as exc:
             logger.exception("Function call %s failed", name)
             result_text = json.dumps({"error": "Backend lookup failed. Please try again."})
-            print(f"[Bridge-BG] Backend lookup FAILED for {name}: {exc!r}")
+            print(f"[Bridge] Backend lookup FAILED for {name}: {exc!r}")
 
-        # ---- 2. Interrupt filler playback ----
-        print("[Bridge-BG] Step 3: Interrupting filler playback")
+        # ---- 3. Interrupt filler and cancel active response ----
+        print("[Bridge] Step 3: Interrupting filler, cancelling active response")
         if self.config.interrupt_playback:
             try:
                 await self.config.interrupt_playback()
             except Exception:
                 logger.exception("interrupt_playback callback failed")
 
-        # ---- 3. Cancel active response and wait for confirmation ----
-        active = self.voice_service._active_response
-        print(f"[Bridge-BG] Step 3a: cancel_response(wait=True)  _active_response={active}")
         await self.voice_service.cancel_response(wait=True)
-        print(f"[Bridge-BG] Step 3b: cancel done  _active_response={self.voice_service._active_response}")
 
         # ---- 4. Send the real result ----
-        print(f"[Bridge-BG] Step 4: Sending real FunctionCallOutputItem")
+        print("[Bridge] Step 4: Sending real FunctionCallOutputItem")
         await self.voice_service.send_function_call_output(
             call_id=call_id, output=result_text, previous_item_id=previous_item_id,
         )
 
         # ---- 5. Ask model to speak the result ----
-        print("[Bridge-BG] Step 5: Requesting model to speak real data")
+        print("[Bridge] Step 5: Requesting model to speak real data")
         await self.voice_service.request_response()
-        print("[Bridge-BG] Done — response.create() sent")
+        print("[Bridge] Done — response.create() sent")
 
         # Notify external callback
         if self._on_agent_complete:
