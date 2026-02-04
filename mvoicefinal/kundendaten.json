@@ -1,36 +1,183 @@
 {
   "customers": [
     {
-      "id": "C-1001",
+      "id": "C-2001",
       "name": "Maria Schmidt",
-      "aliases": ["maria schmidt"]
+      "aliases": ["maria schmidt", "frau schmidt"]
     },
     {
-      "id": "C-1002",
+      "id": "C-2002",
       "name": "Thomas Müller",
-      "aliases": ["thomas mueller", "thomas müller"]
+      "aliases": ["thomas mueller", "thomas müller", "herr müller"]
+    },
+    {
+      "id": "C-2003",
+      "name": "Sofia Weber",
+      "aliases": ["sofia weber", "sophia weber", "frau weber"]
+    },
+    {
+      "id": "C-2004",
+      "name": "Lukas Fischer",
+      "aliases": ["lukas fischer", "lucas fischer", "herr fischer"]
+    },
+    {
+      "id": "C-2005",
+      "name": "Aylin Kaya",
+      "aliases": ["aylin kaya", "frau kaya"]
+    },
+    {
+      "id": "C-2006",
+      "name": "Jonas Becker",
+      "aliases": ["jonas becker", "herr becker"]
     }
   ],
   "orders": [
     {
-      "id": "ORD-5001",
-      "customer_id": "C-1001",
+      "id": "ORD-7001",
+      "customer_id": "C-2001",
       "status": "in_transit",
       "estimated_delivery": "2026-02-05",
-      "delivery_window": "10:00-14:00"
+      "delivery_window": "10:00-14:00",
+      "items": ["USB-C Hub"]
     },
     {
-      "id": "ORD-5002",
-      "customer_id": "C-1001",
+      "id": "ORD-7002",
+      "customer_id": "C-2001",
       "status": "delivered",
-      "delivered_at": "2026-02-02"
+      "delivered_at": "2026-02-02",
+      "items": ["Wireless Mouse"]
     },
     {
-      "id": "ORD-5003",
-      "customer_id": "C-1002",
+      "id": "ORD-7003",
+      "customer_id": "C-2002",
       "status": "processing",
-      "estimated_delivery": "2026-02-07"
+      "estimated_delivery": "2026-02-07",
+      "items": ["Bluetooth Headset"]
+    },
+    {
+      "id": "ORD-7004",
+      "customer_id": "C-2002",
+      "status": "in_transit",
+      "estimated_delivery": "2026-02-06",
+      "delivery_window": "12:00-16:00",
+      "items": ["Laptop Stand"]
+    },
+    {
+      "id": "ORD-7005",
+      "customer_id": "C-2003",
+      "status": "processing",
+      "estimated_delivery": "2026-02-08",
+      "items": ["Phone Charger (USB-C)"]
+    },
+    {
+      "id": "ORD-7006",
+      "customer_id": "C-2003",
+      "status": "delivered",
+      "delivered_at": "2026-01-29",
+      "items": ["Mechanical Keyboard"]
+    },
+    {
+      "id": "ORD-7007",
+      "customer_id": "C-2003",
+      "status": "in_transit",
+      "estimated_delivery": "2026-02-06",
+      "delivery_window": "09:00-12:00",
+      "items": ["Webcam 1080p"]
+    },
+    {
+      "id": "ORD-7008",
+      "customer_id": "C-2004",
+      "status": "processing",
+      "estimated_delivery": "2026-02-09",
+      "items": ["HDMI Cable"]
+    },
+    {
+      "id": "ORD-7009",
+      "customer_id": "C-2004",
+      "status": "in_transit",
+      "estimated_delivery": "2026-02-05",
+      "delivery_window": "14:00-18:00",
+      "items": ["Portable SSD 1TB"]
+    },
+    {
+      "id": "ORD-7010",
+      "customer_id": "C-2004",
+      "status": "delivered",
+      "delivered_at": "2026-01-27",
+      "items": ["Monitor 27-inch"]
+    },
+    {
+      "id": "ORD-7011",
+      "customer_id": "C-2005",
+      "status": "processing",
+      "estimated_delivery": "2026-02-10",
+      "items": ["Smart Speaker"]
+    },
+    {
+      "id": "ORD-7012",
+      "customer_id": "C-2005",
+      "status": "in_transit",
+      "estimated_delivery": "2026-02-06",
+      "delivery_window": "08:00-12:00",
+      "items": ["Noise Cancelling Earbuds"]
+    },
+    {
+      "id": "ORD-7013",
+      "customer_id": "C-2005",
+      "status": "delivered",
+      "delivered_at": "2026-01-31",
+      "items": ["Ergonomic Chair Mat"]
+    },
+    {
+      "id": "ORD-7014",
+      "customer_id": "C-2006",
+      "status": "processing",
+      "estimated_delivery": "2026-02-08",
+      "items": ["USB Microphone"]
+    },
+    {
+      "id": "ORD-7015",
+      "customer_id": "C-2006",
+      "status": "in_transit",
+      "estimated_delivery": "2026-02-05",
+      "delivery_window": "10:00-13:00",
+      "items": ["Wi‑Fi Router"]
+    },
+    {
+      "id": "ORD-7016",
+      "customer_id": "C-2006",
+      "status": "delivered",
+      "delivered_at": "2026-01-26",
+      "items": ["Power Strip"]
+    },
+    {
+      "id": "ORD-7017",
+      "customer_id": "C-2001",
+      "status": "processing",
+      "estimated_delivery": "2026-02-11",
+      "items": ["Laptop Sleeve 15-inch"]
+    },
+    {
+      "id": "ORD-7018",
+      "customer_id": "C-2002",
+      "status": "delivered",
+      "delivered_at": "2026-01-25",
+      "items": ["Bluetooth Trackpad"]
+    },
+    {
+      "id": "ORD-7019",
+      "customer_id": "C-2003",
+      "status": "in_transit",
+      "estimated_delivery": "2026-02-07",
+      "delivery_window": "16:00-20:00",
+      "items": ["USB-C to Ethernet Adapter"]
+    },
+    {
+      "id": "ORD-7020",
+      "customer_id": "C-2004",
+      "status": "processing",
+      "estimated_delivery": "2026-02-12",
+      "items": ["Desk Lamp (LED)"]
     }
   ]
 }
-

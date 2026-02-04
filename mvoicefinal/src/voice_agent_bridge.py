@@ -22,6 +22,7 @@ Architecture:
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from dataclasses import dataclass, field
 from typing import Optional, Callable, Awaitable, Any
@@ -320,7 +321,7 @@ class VoiceAgentBridge:
             await self.voice_service.request_response()
             return
 
-        if action.type == OrderAgentActionType.LOOKUP and action.lookup:
+        if action.type in (OrderAgentActionType.LOOKUP, OrderAgentActionType.LIST_ORDERS) and action.lookup:
             # Immediate acknowledgement to keep the voice conversation snappy.
             if action.say:
                 await self.voice_service.add_system_message(
@@ -463,38 +464,22 @@ class VoiceAgentBridge:
                 "oder Ihren Namen, damit ich es erneut prüfen kann."
             )
 
-        # Order-by-id response.
+        # Order-by-id response: pass the full order payload to the voice model (so it can
+        # summarize without hallucinating).
         if "id" in data and "status" in data:
-            status = data.get("status")
-            order_id = data.get("id")
-            eta = data.get("estimated_delivery")
-            window = data.get("delivery_window")
-            parts = [f"Bestellung {order_id}: Status {status}."]
-            items = data.get("items")
-            if isinstance(items, list) and items:
-                # Keep this short for voice; user can ask for details.
-                parts.append(f"Artikel: {items[0]}.")
-            if eta:
-                if window:
-                    parts.append(f"Voraussichtliche Lieferung {eta} zwischen {window}.")
-                else:
-                    parts.append(f"Voraussichtliche Lieferung {eta}.")
-            return " ".join(parts)
+            order_payload = {k: v for k, v in data.items() if k != "found"}
+            return "order:\n" + json.dumps(order_payload, ensure_ascii=False, indent=2, sort_keys=True)
 
-        # Orders-by-customer response.
+        # Orders-by-customer / list-all response.
         orders = data.get("orders")
         if isinstance(orders, list):
             if not orders:
                 name = data.get("customer_name") or "Ihrem Namen"
                 return f"Ich habe keine Bestellungen zu {name} gefunden. Können Sie mir eine Bestellnummer nennen?"
-            first = orders[0]
-            if isinstance(first, dict):
-                oid = first.get("id", "unknown")
-                status = first.get("status", "unknown")
-                return (
-                    f"Ich sehe eine Bestellung {oid} mit Status {status}. "
-                    "Wenn Sie eine andere Bestellnummer haben, sagen Sie sie mir bitte."
-                )
+
+            payload = {k: v for k, v in data.items() if k != "found"}
+            payload["order_count"] = len(orders)
+            return "orders:\n" + json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
 
         return None
     

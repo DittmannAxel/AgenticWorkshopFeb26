@@ -8,6 +8,8 @@ from typing import Any, Optional, Protocol
 
 import aiohttp
 
+from src.set_logging import logger
+
 
 @dataclass(frozen=True)
 class OrderStatus:
@@ -23,6 +25,9 @@ class OrderBackend(Protocol):
         ...
 
     async def find_recent_orders_by_customer_name(self, customer_name: str) -> list[dict[str, Any]]:
+        ...
+
+    async def list_orders(self) -> list[dict[str, Any]]:
         ...
 
 
@@ -125,6 +130,21 @@ class JsonFileOrderBackend:
             results.append(row)
         return results
 
+    async def list_orders(self) -> list[dict[str, Any]]:
+        data = self._load()
+        customers_by_id, _ = self._customers_index(data)
+
+        results: list[dict[str, Any]] = []
+        for o in self._orders(data):
+            row = dict(o)
+            customer_id = str(row.get("customer_id") or "").strip()
+            if customer_id:
+                customer = customers_by_id.get(customer_id, {})
+                if isinstance(customer, dict) and customer.get("name"):
+                    row["customer_name"] = customer.get("name")
+            results.append(row)
+        return results
+
 
 class HttpOrderBackend:
     """HTTP backend.
@@ -140,19 +160,44 @@ class HttpOrderBackend:
 
     async def get_order_status(self, order_id: str) -> dict[str, Any]:
         url = f"{self._base_url}/orders/{order_id}"
+        logger.info("Orders API call: GET %s", url)
         async with aiohttp.ClientSession(timeout=self._timeout) as session:
             async with session.get(url) as resp:
                 data = await resp.json(content_type=None)
                 if resp.status >= 400:
+                    logger.warning("Orders API error: %s -> HTTP %s (%s)", url, resp.status, data)
                     return {"found": False, "error": data or f"HTTP {resp.status}"}
                 return {"found": True, **(data or {})}
 
     async def find_recent_orders_by_customer_name(self, customer_name: str) -> list[dict[str, Any]]:
         url = f"{self._base_url}/orders"
+        logger.info("Orders API call: GET %s?customer_name=%s", url, customer_name)
         async with aiohttp.ClientSession(timeout=self._timeout) as session:
             async with session.get(url, params={"customer_name": customer_name}) as resp:
                 data = await resp.json(content_type=None)
                 if resp.status >= 400:
+                    logger.warning(
+                        "Orders API error: %s?customer_name=%s -> HTTP %s (%s)",
+                        url,
+                        customer_name,
+                        resp.status,
+                        data,
+                    )
+                    return []
+                if isinstance(data, dict) and "orders" in data and isinstance(data["orders"], list):
+                    return data["orders"]
+                if isinstance(data, list):
+                    return data
+                return []
+
+    async def list_orders(self) -> list[dict[str, Any]]:
+        url = f"{self._base_url}/orders"
+        logger.info("Orders API call: GET %s", url)
+        async with aiohttp.ClientSession(timeout=self._timeout) as session:
+            async with session.get(url) as resp:
+                data = await resp.json(content_type=None)
+                if resp.status >= 400:
+                    logger.warning("Orders API error: %s -> HTTP %s (%s)", url, resp.status, data)
                     return []
                 if isinstance(data, dict) and "orders" in data and isinstance(data["orders"], list):
                     return data["orders"]

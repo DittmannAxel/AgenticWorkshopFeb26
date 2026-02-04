@@ -11,6 +11,7 @@ from src.order_backend import OrderBackend, extract_order_id
 class OrderAgentActionType(str, Enum):
     ASK_IDENTIFIER = "ask_identifier"
     LOOKUP = "lookup"
+    LIST_ORDERS = "list_orders"
     PASS_THROUGH = "pass_through"
 
 
@@ -18,6 +19,7 @@ class OrderAgentActionType(str, Enum):
 class OrderLookupRequest:
     order_id: Optional[str] = None
     customer_name: Optional[str] = None
+    list_all_orders: bool = False
 
 
 @dataclass
@@ -42,6 +44,18 @@ _ORDER_INTENT_RE = re.compile(
     r"lieferung|lieferstatus|lieferzeit|zustellung|"
     r"versand|sendung|paket|tracking|"
     r"status"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_LIST_ORDERS_INTENT_RE = re.compile(
+    r"\b("
+    r"list\s+all\s+orders|"
+    r"show\s+all\s+orders|"
+    r"alle\s+bestellungen|"
+    r"bestellungen\s+auflisten|"
+    r"liste\s+alle\s+bestellungen|"
+    r"zeige\s+alle\s+bestellungen"
     r")\b",
     re.IGNORECASE,
 )
@@ -87,7 +101,8 @@ class OrderAgent:
 
         order_id = extract_order_id(text)
         customer_name = _maybe_extract_customer_name(text)
-        is_order_related = bool(_ORDER_INTENT_RE.search(text)) or self._state.awaiting_identifier
+        wants_list_all = bool(_LIST_ORDERS_INTENT_RE.search(text))
+        is_order_related = wants_list_all or bool(_ORDER_INTENT_RE.search(text)) or self._state.awaiting_identifier
 
         if not is_order_related:
             return OrderAgentAction(type=OrderAgentActionType.PASS_THROUGH)
@@ -95,6 +110,13 @@ class OrderAgent:
         # If we were waiting for an identifier, treat the next user turn as candidate info.
         if self._state.awaiting_identifier:
             self._state.awaiting_identifier = False
+
+        if wants_list_all:
+            return OrderAgentAction(
+                type=OrderAgentActionType.LIST_ORDERS,
+                say="Einen Moment bitte, ich liste alle Bestellungen auf.",
+                lookup=OrderLookupRequest(list_all_orders=True),
+            )
 
         if order_id:
             self._state.last_order_id = order_id
@@ -122,6 +144,9 @@ class OrderAgent:
         )
 
     async def lookup(self, request: OrderLookupRequest) -> dict[str, Any]:
+        if request.list_all_orders:
+            orders = await self._backend.list_orders()
+            return {"found": bool(orders), "orders": orders}
         if request.order_id:
             return await self._backend.get_order_status(request.order_id)
         if request.customer_name:
