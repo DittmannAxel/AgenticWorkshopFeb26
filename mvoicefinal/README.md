@@ -256,14 +256,19 @@ async def voice_with_agent(service: VoiceService, agent):
 ## Project Structure
 
 ```
-voice/
+./
 ├── main.py                     # CLI entry point
+├── main_agent.py               # CLI entry point (order agent)
 ├── pyproject.toml
 ├── README.md
 └── src/
     ├── voice_service.py        # Core VoiceService (integration-ready)
+    ├── voice_agent_bridge.py   # Transcript -> agent -> speak result
     ├── basic_voice_assistant.py # CLI wrapper with PyAudio
     ├── audio_processor.py      # PyAudio capture/playback
+    ├── order_agent.py          # Multi-turn order-status logic
+    ├── order_backend.py        # HTTP + in-memory mock backend
+    ├── mock_orders_api.py      # Optional local mock HTTP server
     └── set_logging.py          # Logging configuration
 ```
 

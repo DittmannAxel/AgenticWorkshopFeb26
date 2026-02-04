@@ -2,17 +2,17 @@
 # Agent Voice Assistant - CLI Entry Point
 # -------------------------------------------------------------------------
 """
-Command-line voice assistant with non-blocking LangGraph agent integration.
+Command-line voice assistant with non-blocking order lookup integration.
 
 This provides a standalone CLI for voice conversations that:
 - Uses PyAudio for local microphone/speaker I/O
 - Processes speech through Azure VoiceLive
-- Routes data queries to LangGraph agent in background
-- Continues conversation while agent processes tool calls
+- Routes order-status queries to a background lookup
+- Continues conversation while the lookup runs
 
 Usage:
-    python voice/main_agent.py --endpoint <url> --use-token-credential
-    python voice/main_agent.py --api-key <key> --endpoint <url>
+    python main_agent.py --endpoint <url> --use-token-credential
+    python main_agent.py --api-key <key> --endpoint <url>
 
 Environment Variables:
     AZURE_VOICELIVE_ENDPOINT - VoiceLive endpoint URL
