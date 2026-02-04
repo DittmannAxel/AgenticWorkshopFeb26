@@ -29,14 +29,19 @@ from azure.ai.voicelive.models import (
     AudioInputTranscriptionOptions,
     AudioNoiseReduction,
     AzureStandardVoice,
+    FunctionCallOutputItem,
+    FunctionTool,
     InputAudioFormat,
     InputTextContentPart,
+    ItemType,
     Modality,
     OutputAudioFormat,
     RequestSession,
     ServerEventType,
     ServerVad,
     SystemMessageItem,
+    Tool,
+    ToolChoiceLiteral,
     UserMessageItem,
 )
 
@@ -57,6 +62,8 @@ class VoiceEventType(str, Enum):
     RESPONSE_TEXT = "response_text"
     RESPONSE_ENDED = "response_ended"
     TRANSCRIPT = "transcript"
+    FUNCTION_CALL_STARTED = "function_call_started"
+    FUNCTION_CALL_ARGUMENTS_DONE = "function_call_arguments_done"
     ERROR = "error"
 
 
@@ -90,6 +97,10 @@ class VoiceServiceConfig:
     # STT model for input_audio_transcription.
     # Common values in Voice Live examples include "azure-speech".
     transcription_model: str = "azure-speech"
+
+    # Function calling
+    tools: list[Tool] = field(default_factory=list)
+    tool_choice: Optional[ToolChoiceLiteral] = None
 
 
 # Type alias for event callbacks
@@ -310,6 +321,30 @@ class VoiceService:
         item = UserMessageItem(content=[InputTextContentPart(text=text)])
         await self._connection.conversation.item.create(item=item)
 
+    async def send_function_call_output(
+        self,
+        call_id: str,
+        output: str,
+        previous_item_id: Optional[str] = None,
+    ) -> None:
+        """Send a function call result back to VoiceLive.
+
+        Args:
+            call_id: The call_id from the function call event.
+            output: JSON-serialised result string.
+            previous_item_id: Optional item id for ordering.
+        """
+        if not self._connection:
+            logger.warning("Cannot send function call output: not connected")
+            return
+        logger.info("Sending FunctionCallOutputItem call_id=%s output=%s", call_id, output[:200])
+        print(f"   -> Sending FunctionCallOutputItem (call_id={call_id[:12]}..., {len(output)} chars)")
+        item = FunctionCallOutputItem(call_id=call_id, output=output)
+        kwargs: dict[str, Any] = {"item": item}
+        if previous_item_id:
+            kwargs["previous_item_id"] = previous_item_id
+        await self._connection.conversation.item.create(**kwargs)
+
     async def set_next_response_directive(self, directive: str, context: str | None = None) -> None:
         """Set a one-shot directive that the model should follow for the next response."""
         if not self._connection:
@@ -332,6 +367,7 @@ class VoiceService:
         """Request the model to generate the next response (audio/text)."""
         if not self._connection or not self._session_ready:
             logger.warning("Cannot request response: session not ready")
+            print("   [VoiceService] request_response SKIPPED (not connected/ready)")
             return
 
         if interrupt:
@@ -340,25 +376,48 @@ class VoiceService:
         # If a response is already active, defer until RESPONSE_DONE.
         if self._active_response and not self._response_api_done:
             self._pending_response_request = True
+            print("   [VoiceService] request_response DEFERRED (response still active)")
             return
 
         try:
+            print("   [VoiceService] response.create()")
             await self._connection.response.create()
         except (RuntimeError, ConnectionError) as e:
             # Some backends raise if no user input is available; keep it non-fatal.
             logger.warning("response.create failed: %s", e)
+            print(f"   [VoiceService] response.create() FAILED: {e}")
 
-    async def cancel_response(self) -> None:
-        """Cancel the current response (for barge-in support)."""
+    async def cancel_response(self, *, wait: bool = False) -> None:
+        """Cancel the current response (for barge-in support).
+
+        Args:
+            wait: If True, block until the RESPONSE_DONE event clears
+                  ``_active_response`` (up to 5 s).
+        """
         if not self._connection or not self._active_response:
+            print(f"   [VoiceService] cancel_response: nothing to cancel (_active_response={self._active_response})")
             return
 
         try:
             await self._connection.response.cancel()
             logger.debug("Cancelled in-progress response")
+            print("   [VoiceService] cancel_response: cancel sent to server")
         except (RuntimeError, ConnectionError) as e:
             if "no active response" not in str(e).lower():
                 logger.warning("Cancel failed: %s", e)
+                print(f"   [VoiceService] cancel_response FAILED: {e}")
+
+        if wait:
+            print("   [VoiceService] cancel_response: waiting for RESPONSE_DONE...")
+            for i in range(50):  # 50 × 100 ms = 5 s max
+                if not self._active_response:
+                    print(f"   [VoiceService] cancel_response: confirmed after {(i+1)*100}ms")
+                    break
+                await asyncio.sleep(0.1)
+            if self._active_response:
+                logger.warning("Timed out waiting for response cancellation to complete")
+                print("   [VoiceService] cancel_response: TIMED OUT (5s) — forcing _active_response=False")
+                self._active_response = False
 
     async def _setup_session(self) -> None:
         """Configure the VoiceLive session."""
@@ -379,7 +438,7 @@ class VoiceService:
         )
 
         # Build session configuration
-        session_config = RequestSession(
+        session_kwargs: dict[str, Any] = dict(
             modalities=[Modality.TEXT, Modality.AUDIO],
             instructions=self.config.instructions,
             voice=voice_config,
@@ -392,6 +451,18 @@ class VoiceService:
             ),
             temperature=self.config.temperature,
         )
+
+        # Register function-calling tools if provided
+        if self.config.tools:
+            session_kwargs["tools"] = self.config.tools
+            if self.config.tool_choice:
+                session_kwargs["tool_choice"] = self.config.tool_choice
+            tool_names = [t.name for t in self.config.tools if hasattr(t, "name")]
+            logger.info("Registering %d tools: %s", len(self.config.tools), tool_names)
+            print(f"🔧 Registered {len(self.config.tools)} function tools: {tool_names}")
+            print(f"🔧 Tool choice: {self.config.tool_choice}")
+
+        session_config = RequestSession(**session_kwargs)
 
         # Add optional audio enhancements
         if self.config.enable_echo_cancellation:
@@ -471,10 +542,12 @@ class VoiceService:
 
             if self._pending_response_request and self._connection:
                 self._pending_response_request = False
+                print("   [VoiceService] Firing deferred response.create()")
                 try:
                     await self._connection.response.create()
                 except Exception as e:
                     logger.debug("Deferred response.create failed: %s", e)
+                    print(f"   [VoiceService] Deferred response.create() FAILED: {e}")
 
         elif event.type == ServerEventType.ERROR:
             msg = event.error.message
@@ -506,9 +579,41 @@ class VoiceService:
             error_msg = getattr(event, 'error', None)
             logger.error("Transcription failed: %s", error_msg)
 
+        elif event.type == ServerEventType.RESPONSE_FUNCTION_CALL_ARGUMENTS_DONE:
+            # Function call arguments are fully streamed — ready to execute
+            fn_name = getattr(event, "name", "?")
+            fn_args = getattr(event, "arguments", "")
+            fn_call_id = getattr(event, "call_id", "?")
+            logger.info("Function call arguments done: %s(%s) call_id=%s", fn_name, fn_args, fn_call_id)
+            print(f"   [VoiceLive] FUNCTION_CALL_ARGUMENTS_DONE: {fn_name}({fn_args})")
+            await self._emit_event(VoiceEvent(
+                type=VoiceEventType.FUNCTION_CALL_ARGUMENTS_DONE,
+                data={
+                    "name": fn_name,
+                    "call_id": fn_call_id,
+                    "arguments": fn_args,
+                }
+            ))
+
         elif event.type == ServerEventType.CONVERSATION_ITEM_CREATED:
-            # Check for transcript in conversation items (assistant responses)
             item = event.item
+            # Detect function_call items
+            if getattr(item, "type", None) == ItemType.FUNCTION_CALL:
+                fn_name = getattr(item, "name", "?")
+                fn_call_id = getattr(item, "call_id", "?")
+                fn_item_id = getattr(item, "id", "?")
+                logger.info("Function call item created: %s call_id=%s item_id=%s", fn_name, fn_call_id, fn_item_id)
+                print(f"   [VoiceLive] CONVERSATION_ITEM_CREATED (function_call): {fn_name} call_id={fn_call_id}")
+                await self._emit_event(VoiceEvent(
+                    type=VoiceEventType.FUNCTION_CALL_STARTED,
+                    data={
+                        "name": fn_name,
+                        "call_id": fn_call_id,
+                        "item_id": fn_item_id,
+                    }
+                ))
+
+            # Check for transcript in conversation items (assistant responses)
             if hasattr(item, 'content') and item.content:
                 for content in item.content:
                     if hasattr(content, 'transcript') and content.transcript:

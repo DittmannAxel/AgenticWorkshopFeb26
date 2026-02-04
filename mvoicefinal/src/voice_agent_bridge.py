@@ -27,10 +27,12 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Optional, Callable, Awaitable, Any
 
+from azure.ai.voicelive.models import FunctionTool, Tool, ToolChoiceLiteral
+
 from src.voice_service import VoiceService, VoiceEvent, VoiceEventType
 from src.query_classifier import (
-    QueryClassifier, 
-    KeywordClassifier, 
+    QueryClassifier,
+    KeywordClassifier,
     ClassifierConfig,
     QueryType,
     ClassificationResult,
@@ -43,6 +45,44 @@ from src.pending_task_manager import (
 )
 from src.set_logging import logger
 from src.order_agent import OrderAgent, OrderAgentActionType, OrderLookupRequest
+from src.order_backend import OrderBackend
+
+
+# ---------------------------------------------------------------------------
+# Function-calling tool definitions for the order-status use case
+# ---------------------------------------------------------------------------
+
+ORDER_TOOLS: list[Tool] = [
+    FunctionTool(
+        name="get_order_status",
+        description="Bestellstatus anhand der Bestellnummer abfragen (z.B. ORD-7001)",
+        parameters={
+            "type": "object",
+            "properties": {
+                "order_id": {"type": "string", "description": "Bestellnummer, z.B. ORD-7001"}
+            },
+            "required": ["order_id"],
+        },
+    ),
+    FunctionTool(
+        name="find_orders_by_customer_name",
+        description="Bestellungen eines Kunden anhand des Namens suchen",
+        parameters={
+            "type": "object",
+            "properties": {
+                "customer_name": {"type": "string", "description": "Vor- und Nachname des Kunden"}
+            },
+            "required": ["customer_name"],
+        },
+    ),
+    FunctionTool(
+        name="list_all_orders",
+        description="Alle Bestellungen auflisten",
+        parameters={"type": "object", "properties": {}},
+    ),
+]
+
+ORDER_TOOL_CHOICE = ToolChoiceLiteral.AUTO
 
 
 @dataclass
@@ -141,39 +181,45 @@ class VoiceAgentBridge:
     def __init__(
         self,
         voice_service: VoiceService,
-        agent: Any,  # LangGraph CompiledGraph
+        agent: Any,  # LangGraph CompiledGraph or OrderAgent
         config: Optional[BridgeConfig] = None,
         thread_id: Optional[str] = None,
+        order_backend: Optional[OrderBackend] = None,
     ):
         self.voice_service = voice_service
         self.agent = agent
         self.config = config or BridgeConfig()
         self.thread_id = thread_id or str(uuid.uuid4())
-        
+        self._order_backend = order_backend
+
         # Initialize classifier
         self.classifier: QueryClassifier = KeywordClassifier(
             self.config.classifier_config
         )
-        
+
         # Initialize task manager
         task_config = TaskManagerConfig(
             max_concurrent_tasks=self.config.max_concurrent_queries,
             default_timeout=self.config.agent_timeout,
         )
         self.task_manager = PendingTaskManager(task_config)
-        
+
         # State
         self._running = False
         self._ack_index = 0
-        
+
         # External callbacks
         self._on_agent_start: Optional[AgentStartCallback] = None
         self._on_agent_complete: Optional[AgentCompleteCallback] = None
         self._on_agent_error: Optional[AgentErrorCallback] = None
-        
+
         # Track processed transcripts to avoid duplicates
         self._processed_transcripts: set[str] = set()
         self._max_processed_cache = 100
+
+        # Pending function call context (set by FUNCTION_CALL_STARTED,
+        # consumed by FUNCTION_CALL_ARGUMENTS_DONE)
+        self._pending_function_call: Optional[dict[str, Any]] = None
     
     @property
     def pending_query_count(self) -> int:
@@ -219,8 +265,10 @@ class VoiceAgentBridge:
         
         # Register as voice event listener
         self.voice_service.on_event(self._handle_voice_event)
-        
-        logger.info("VoiceAgentBridge started")
+
+        mode = "native function calling" if self._order_backend else "transcript interception"
+        logger.info("VoiceAgentBridge started (mode: %s)", mode)
+        print(f"[Bridge] Started in mode: {mode}")
     
     async def stop(self) -> None:
         """Stop the bridge and cleanup resources."""
@@ -252,31 +300,63 @@ class VoiceAgentBridge:
         """Handle incoming voice events."""
         if not self._running:
             return
-        
-        # Only process user transcripts
+
+        # --- Function-calling path (native VoiceLive tools) ----------------
+        if event.type == VoiceEventType.FUNCTION_CALL_STARTED:
+            self._pending_function_call = {
+                "name": event.data.get("name"),
+                "call_id": event.data.get("call_id"),
+                "item_id": event.data.get("item_id"),
+            }
+            logger.info("Function call started: %s", self._pending_function_call.get("name"))
+            return
+
+        if event.type == VoiceEventType.FUNCTION_CALL_ARGUMENTS_DONE:
+            fc = self._pending_function_call or {}
+            call_id = event.data.get("call_id") or fc.get("call_id")
+            name = event.data.get("name") or fc.get("name")
+            item_id = fc.get("item_id")
+            arguments = event.data.get("arguments", "{}")
+            self._pending_function_call = None
+
+            if name and call_id and self._order_backend:
+                await self._handle_function_call(
+                    name=name,
+                    call_id=call_id,
+                    arguments=arguments,
+                    previous_item_id=item_id,
+                )
+            return
+
+        # --- Transcript-interception path (fallback when no tools) ---------
         if event.type != VoiceEventType.TRANSCRIPT:
             return
-        
+
+        # When function calling is active, the model decides tool use on its
+        # own — we do NOT intercept transcripts for OrderAgent routing.
+        if self._order_backend:
+            logger.debug("Skipping transcript interception (function-calling mode active)")
+            return
+
         role = event.data.get("role", "")
         transcript = event.data.get("transcript", "")
-        
+
         if role != "user" or not transcript:
             return
-        
+
         # Deduplicate (VoiceLive may emit same transcript multiple times)
         transcript_key = transcript.strip().lower()[:100]
         if transcript_key in self._processed_transcripts:
             return
-        
+
         self._processed_transcripts.add(transcript_key)
-        
+
         # Trim cache if too large
         if len(self._processed_transcripts) > self._max_processed_cache:
-            # Remove oldest entries (convert to list, slice, convert back)
             excess = len(self._processed_transcripts) - self._max_processed_cache // 2
             items = list(self._processed_transcripts)
             self._processed_transcripts = set(items[excess:])
-        
+
         # Process the transcript
         await self._process_user_transcript(transcript)
     
@@ -351,6 +431,145 @@ class VoiceAgentBridge:
         await self._spawn_order_lookup_task(original_query=text, request=action.lookup)
         return
     
+    # ------------------------------------------------------------------
+    # Native function-calling path
+    # ------------------------------------------------------------------
+
+    async def _handle_function_call(
+        self,
+        name: str,
+        call_id: str,
+        arguments: str,
+        previous_item_id: Optional[str] = None,
+    ) -> None:
+        """Handle a function call from VoiceLive (native tool use)."""
+        logger.info("Function call: %s(%s)", name, arguments)
+        print(f"[Bridge] Handling function call: {name}({arguments})")
+
+        # Notify external callback
+        if self._on_agent_start:
+            try:
+                await self._on_agent_start(f"{name}({arguments})")
+            except Exception as e:
+                logger.error("Error in agent start callback: %s", e)
+
+        # 1. Send immediate acknowledgement so the model can speak a filler
+        ack = json.dumps({"status": "searching", "message": "Abfrage gestartet, Ergebnis folgt."})
+        print(f"[Bridge] Step 1: Sending immediate ack -> model will speak filler")
+        await self.voice_service.send_function_call_output(
+            call_id=call_id, output=ack, previous_item_id=previous_item_id,
+        )
+        await self.voice_service.request_response()
+
+        # 2. Execute the real lookup in a background task
+        print(f"[Bridge] Step 2: Spawning background task for {name}")
+        asyncio.create_task(
+            self._execute_function_call_in_background(
+                name=name,
+                call_id=call_id,
+                arguments=arguments,
+                previous_item_id=previous_item_id,
+            )
+        )
+
+    async def _execute_function_call_in_background(
+        self,
+        name: str,
+        call_id: str,
+        arguments: str,
+        previous_item_id: Optional[str] = None,
+    ) -> None:
+        """Run the actual backend lookup and send the real result."""
+        try:
+            await self._do_function_call_lookup(
+                name=name,
+                call_id=call_id,
+                arguments=arguments,
+                previous_item_id=previous_item_id,
+            )
+        except Exception as exc:
+            # Catch-all so the background task never dies silently
+            logger.exception("Background function-call task crashed")
+            print(f"[Bridge-BG] FATAL: background task crashed: {exc!r}")
+
+    async def _do_function_call_lookup(
+        self,
+        name: str,
+        call_id: str,
+        arguments: str,
+        previous_item_id: Optional[str] = None,
+    ) -> None:
+        """Inner implementation — called inside a top-level try/except."""
+        assert self._order_backend is not None
+        print(f"[Bridge-BG] Starting backend lookup: {name}({arguments})")
+
+        # ---- 1. Execute backend call ----
+        try:
+            args = json.loads(arguments) if arguments else {}
+            result: Any
+
+            if name == "get_order_status":
+                order_id = args.get("order_id", "")
+                print(f"[Bridge-BG] -> get_order_status(order_id={order_id!r})")
+                result = await self._order_backend.get_order_status(order_id)
+            elif name == "find_orders_by_customer_name":
+                customer_name = args.get("customer_name", "")
+                print(f"[Bridge-BG] -> find_recent_orders_by_customer_name(customer_name={customer_name!r})")
+                orders = await self._order_backend.find_recent_orders_by_customer_name(customer_name)
+                result = {"found": bool(orders), "orders": orders, "customer_name": customer_name}
+            elif name == "list_all_orders":
+                print("[Bridge-BG] -> list_orders()")
+                orders = await self._order_backend.list_orders()
+                result = {"found": bool(orders), "orders": orders}
+            else:
+                print(f"[Bridge-BG] -> Unknown function: {name}")
+                result = {"error": f"Unknown function: {name}"}
+
+            result_text = json.dumps(result, ensure_ascii=False, default=str)
+            logger.info("Function call %s completed: %s", name, result_text[:200])
+            print(f"[Bridge-BG] Backend result ({len(result_text)} chars): {result_text[:150]}...")
+
+        except Exception as exc:
+            logger.exception("Function call %s failed", name)
+            result_text = json.dumps({"error": "Backend lookup failed. Please try again."})
+            print(f"[Bridge-BG] Backend lookup FAILED for {name}: {exc!r}")
+
+        # ---- 2. Interrupt filler playback ----
+        print("[Bridge-BG] Step 3: Interrupting filler playback")
+        if self.config.interrupt_playback:
+            try:
+                await self.config.interrupt_playback()
+            except Exception:
+                logger.exception("interrupt_playback callback failed")
+
+        # ---- 3. Cancel active response and wait for confirmation ----
+        active = self.voice_service._active_response
+        print(f"[Bridge-BG] Step 3a: cancel_response(wait=True)  _active_response={active}")
+        await self.voice_service.cancel_response(wait=True)
+        print(f"[Bridge-BG] Step 3b: cancel done  _active_response={self.voice_service._active_response}")
+
+        # ---- 4. Send the real result ----
+        print(f"[Bridge-BG] Step 4: Sending real FunctionCallOutputItem")
+        await self.voice_service.send_function_call_output(
+            call_id=call_id, output=result_text, previous_item_id=previous_item_id,
+        )
+
+        # ---- 5. Ask model to speak the result ----
+        print("[Bridge-BG] Step 5: Requesting model to speak real data")
+        await self.voice_service.request_response()
+        print("[Bridge-BG] Done — response.create() sent")
+
+        # Notify external callback
+        if self._on_agent_complete:
+            try:
+                await self._on_agent_complete(f"{name}({arguments})", result_text)
+            except Exception as e:
+                logger.error("Error in agent complete callback: %s", e)
+
+    # ------------------------------------------------------------------
+    # Legacy transcript-interception path
+    # ------------------------------------------------------------------
+
     async def _spawn_order_lookup_task(self, original_query: str, request: OrderLookupRequest) -> None:
         """Spawn a non-blocking order lookup task for the query."""
         logger.info(f"Spawning order lookup task for: {original_query[:50]}...")

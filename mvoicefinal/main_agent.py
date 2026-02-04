@@ -47,7 +47,7 @@ from azure.identity.aio import AzureCliCredential
 import pyaudio
 
 from src.voice_service import VoiceService, VoiceServiceConfig, VoiceEvent, VoiceEventType
-from src.voice_agent_bridge import VoiceAgentBridge, BridgeConfig
+from src.voice_agent_bridge import VoiceAgentBridge, BridgeConfig, ORDER_TOOLS, ORDER_TOOL_CHOICE
 from src.audio_processor import AudioProcessor
 from src.set_logging import logger
 from src.order_agent import OrderAgent
@@ -99,7 +99,7 @@ class AgentVoiceAssistant:
         vad_silence_ms: int = 800,
         temperature: float = 0.6,
     ):
-        # Voice service config
+        # Voice service config (with native function-calling tools)
         config = VoiceServiceConfig(
             endpoint=endpoint,
             model=model,
@@ -108,16 +108,19 @@ class AgentVoiceAssistant:
             vad_threshold=vad_threshold,
             vad_silence_duration_ms=vad_silence_ms,
             temperature=temperature,
+            tools=ORDER_TOOLS,
+            tool_choice=ORDER_TOOL_CHOICE,
         )
         
         self.voice_service = VoiceService(credential, config)
         self.agent_timeout = agent_timeout
         self.orders_service_url = orders_service_url
-        
+
         # Components initialized in start()
         self.audio_processor: Optional[AudioProcessor] = None
         self.bridge: Optional[VoiceAgentBridge] = None
         self.agent = None
+        self._order_backend = None
         
         # State tracking
         self._agent_working = False
@@ -130,14 +133,14 @@ class AgentVoiceAssistant:
         try:
             logger.info("Starting AgentVoiceAssistant")
             
-            # Create deterministic order agent (backend is HTTP or local JSON file)
+            # Create order backend (HTTP or local JSON file)
             orders_url = (self.orders_service_url or os.environ.get("ORDERS_SERVICE_URL") or "").strip()
             kundendaten_path = os.environ.get("KUNDENDATEN_PATH") or str(
                 Path(__file__).resolve().parent / "kundendaten.json"
             )
-            backend = HttpOrderBackend(orders_url) if orders_url else JsonFileOrderBackend(kundendaten_path)
-            self.agent = OrderAgent(backend)
-            print("✅ Order agent ready")
+            self._order_backend = HttpOrderBackend(orders_url) if orders_url else JsonFileOrderBackend(kundendaten_path)
+            self.agent = OrderAgent(self._order_backend)
+            print("✅ Order backend + agent ready (native function calling)")
             
             # Start voice service
             print("🎤 Connecting to Azure VoiceLive...")
@@ -157,6 +160,7 @@ class AgentVoiceAssistant:
                 voice_service=self.voice_service,
                 agent=self.agent,
                 config=bridge_config,
+                order_backend=self._order_backend,
             )
             
             # Register bridge callbacks for CLI feedback
@@ -243,6 +247,15 @@ class AgentVoiceAssistant:
             else:
                 print("💬 Ready")
         
+        elif event.type == VoiceEventType.FUNCTION_CALL_STARTED:
+            name = event.data.get("name", "?")
+            print(f"🔧 Function call: {name}")
+
+        elif event.type == VoiceEventType.FUNCTION_CALL_ARGUMENTS_DONE:
+            name = event.data.get("name", "?")
+            args = event.data.get("arguments", "")
+            print(f"🔧 Function call args ready: {name}({args})")
+
         elif event.type == VoiceEventType.TRANSCRIPT:
             role = event.data.get("role", "unknown")
             text = event.data.get("transcript", "")
