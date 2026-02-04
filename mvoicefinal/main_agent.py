@@ -51,7 +51,7 @@ from src.voice_agent_bridge import VoiceAgentBridge, BridgeConfig
 from src.audio_processor import AudioProcessor
 from src.set_logging import logger
 from src.order_agent import OrderAgent
-from src.order_backend import MockOrderBackend, HttpOrderBackend
+from src.order_backend import JsonFileOrderBackend, HttpOrderBackend
 
 
 # -------------------------------------------------------------------------
@@ -61,7 +61,7 @@ from src.order_backend import MockOrderBackend, HttpOrderBackend
 AGENT_VOICE_INSTRUCTIONS = """Sie sind ein professioneller Kundenservice-Assistent.
 
 WICHTIGE REGELN:
-1. Wenn der Kunde nach einer Bestellung fragt und keine Bestellnummer (z.B. ORD-5001) oder kein Name vorliegt, fragen Sie danach.
+1. Wenn der Kunde nach einer Bestellung fragt und keine Bestellnummer (z.B. ORD-<nummer>) oder kein Name vorliegt, fragen Sie danach.
 2. Sobald Bestellnummer oder Name vorliegt, beantworten Sie die Frage anhand des Zusatzkontexts.
 3. Antworten Sie kurz und gut verständlich (Voice).
 4. Verwenden Sie die Sie-Form.
@@ -130,9 +130,12 @@ class AgentVoiceAssistant:
         try:
             logger.info("Starting AgentVoiceAssistant")
             
-            # Create deterministic order agent (no external LangGraph dependency)
+            # Create deterministic order agent (backend is HTTP or local JSON file)
             orders_url = (self.orders_service_url or os.environ.get("ORDERS_SERVICE_URL") or "").strip()
-            backend = HttpOrderBackend(orders_url) if orders_url else MockOrderBackend()
+            kundendaten_path = os.environ.get("KUNDENDATEN_PATH") or str(
+                Path(__file__).resolve().parent / "kundendaten.json"
+            )
+            backend = HttpOrderBackend(orders_url) if orders_url else JsonFileOrderBackend(kundendaten_path)
             self.agent = OrderAgent(backend)
             print("✅ Order agent ready")
             

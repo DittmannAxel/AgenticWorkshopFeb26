@@ -52,7 +52,7 @@ def _maybe_extract_customer_name(text: str) -> Optional[str]:
         if m:
             return m.group(1).strip()
 
-    # If user just says two words (e.g., "Maria Schmidt"), assume that's the name.
+    # If user just says two words (e.g., "Max Mustermann"), assume that's the name.
     tokens = cleaned.split()
     if len(tokens) == 2 and all(t and t[0].isalpha() for t in tokens):
         return cleaned
@@ -108,7 +108,7 @@ class OrderAgent:
             type=OrderAgentActionType.ASK_IDENTIFIER,
             say=(
                 "Gerne. Können Sie mir bitte Ihre Bestellnummer nennen, "
-                "zum Beispiel ORD-5001, oder alternativ Ihren Namen?"
+                "zum Beispiel ORD-<nummer>, oder alternativ Ihren Namen?"
             ),
         )
 
@@ -119,4 +119,3 @@ class OrderAgent:
             orders = await self._backend.find_recent_orders_by_customer_name(request.customer_name)
             return {"found": bool(orders), "orders": orders, "customer_name": request.customer_name}
         return {"found": False, "error": "No lookup parameters provided."}
-

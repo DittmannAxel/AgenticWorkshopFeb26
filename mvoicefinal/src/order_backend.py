@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional, Protocol
 
 import aiohttp
@@ -24,48 +26,104 @@ class OrderBackend(Protocol):
         ...
 
 
-class MockOrderBackend:
-    """In-memory fallback backend (no external service required)."""
+def _norm(s: str) -> str:
+    return " ".join((s or "").strip().lower().split())
 
-    _CUSTOMERS_BY_NAME = {
-        "maria schmidt": {"customer_id": "C-1001", "name": "Maria Schmidt"},
-        "thomas müller": {"customer_id": "C-1002", "name": "Thomas Müller"},
-        "thomas mueller": {"customer_id": "C-1002", "name": "Thomas Müller"},
-    }
 
-    _ORDERS = {
-        "ORD-5001": {
-            "id": "ORD-5001",
-            "customer_name": "Maria Schmidt",
-            "status": "in_transit",
-            "estimated_delivery": "tomorrow",
-            "delivery_window": "10:00-14:00",
-        },
-        "ORD-5002": {
-            "id": "ORD-5002",
-            "customer_name": "Maria Schmidt",
-            "status": "delivered",
-        },
-        "ORD-5003": {
-            "id": "ORD-5003",
-            "customer_name": "Thomas Müller",
-            "status": "processing",
-            "estimated_delivery": "in three days",
-        },
-    }
+class CustomerDataError(RuntimeError):
+    pass
+
+
+class JsonFileOrderBackend:
+    """File-based backend reading orders/customers from a JSON file.
+
+    This lets you change `kundendaten.json` without changing any code.
+    """
+
+    def __init__(self, json_path: str | Path):
+        self._path = Path(json_path)
+
+    def _load(self) -> dict[str, Any]:
+        if not self._path.exists():
+            raise CustomerDataError(f"Customer data file not found: {self._path}")
+        try:
+            return json.loads(self._path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            raise CustomerDataError(f"Invalid JSON in {self._path}: {e}") from e
+
+    def _customers_index(self, data: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+        customers = data.get("customers")
+        if customers is None:
+            customers = []
+        if not isinstance(customers, list):
+            raise CustomerDataError("`customers` must be a list")
+
+        by_id: dict[str, dict[str, Any]] = {}
+        by_name: dict[str, dict[str, Any]] = {}
+        for c in customers:
+            if not isinstance(c, dict):
+                continue
+            cid = str(c.get("id") or "").strip()
+            name = str(c.get("name") or "").strip()
+            if cid:
+                by_id[cid] = c
+            if name:
+                by_name[_norm(name)] = c
+            aliases = c.get("aliases") or []
+            if isinstance(aliases, list):
+                for a in aliases:
+                    if isinstance(a, str) and a.strip():
+                        by_name[_norm(a)] = c
+        return by_id, by_name
+
+    def _orders(self, data: dict[str, Any]) -> list[dict[str, Any]]:
+        orders = data.get("orders")
+        if orders is None:
+            return []
+        if not isinstance(orders, list):
+            raise CustomerDataError("`orders` must be a list")
+        return [o for o in orders if isinstance(o, dict)]
 
     async def get_order_status(self, order_id: str) -> dict[str, Any]:
-        order = self._ORDERS.get(order_id.upper())
-        if not order:
-            return {"found": False, "error": f"Order {order_id} not found."}
-        return {"found": True, **order}
+        data = self._load()
+        customers_by_id, _ = self._customers_index(data)
+
+        order_id_norm = (order_id or "").strip().upper()
+        for o in self._orders(data):
+            if str(o.get("id") or "").strip().upper() != order_id_norm:
+                continue
+            customer_id = str(o.get("customer_id") or "").strip()
+            customer = customers_by_id.get(customer_id, {})
+            result = dict(o)
+            if customer_id:
+                result["customer_id"] = customer_id
+            if customer:
+                result["customer_name"] = customer.get("name")
+            return {"found": True, **result}
+
+        return {"found": False, "error": f"Order {order_id} not found."}
 
     async def find_recent_orders_by_customer_name(self, customer_name: str) -> list[dict[str, Any]]:
-        customer = self._CUSTOMERS_BY_NAME.get(customer_name.strip().lower())
+        data = self._load()
+        customers_by_id, customers_by_name = self._customers_index(data)
+
+        customer = customers_by_name.get(_norm(customer_name))
         if not customer:
             return []
-        name = customer["name"]
-        return [o for o in self._ORDERS.values() if o.get("customer_name") == name]
+
+        customer_id = str(customer.get("id") or "").strip()
+        if not customer_id:
+            return []
+
+        name = str(customer.get("name") or "").strip()
+        results: list[dict[str, Any]] = []
+        for o in self._orders(data):
+            if str(o.get("customer_id") or "").strip() != customer_id:
+                continue
+            row = dict(o)
+            row["customer_name"] = name
+            results.append(row)
+        return results
 
 
 class HttpOrderBackend:
@@ -113,4 +171,3 @@ def extract_order_id(text: str) -> Optional[str]:
     raw = match.group(0).upper().replace(" ", "").replace("ORD", "ORD-")
     raw = raw.replace("ORD--", "ORD-")
     return raw
-

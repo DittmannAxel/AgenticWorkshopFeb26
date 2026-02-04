@@ -285,7 +285,7 @@ class VoiceAgentBridge:
         result = self.classify_query(text)
 
         # If the order agent previously asked for an identifier, treat the next user turn
-        # as data lookup even if the utterance is only "ORD-5001" or a plain name.
+        # as data lookup even if the utterance is only "ORD-<nummer>" or a plain name.
         if isinstance(self.agent, OrderAgent) and self.agent.state.awaiting_identifier:
             result = ClassificationResult(
                 query_type=QueryType.DATA_LOOKUP,
@@ -337,8 +337,6 @@ class VoiceAgentBridge:
                 f"Cannot spawn agent task: at capacity "
                 f"({self.pending_query_count}/{self.config.max_concurrent_queries})"
             )
-            return
-
             # Speak a concise “busy” message if we cannot lookup right now.
             await self.voice_service.add_system_message(
                 f'User said: "{text}"\n\nAufgabe: Sagen Sie dem Kunden kurz: '
@@ -456,7 +454,7 @@ class VoiceAgentBridge:
         if data.get("found") is False:
             err = data.get("error") or "Order not found."
             return (
-                f"{err} Bitte nennen Sie mir Ihre Bestellnummer (z.B. ORD-5001) "
+                f"{err} Bitte nennen Sie mir Ihre Bestellnummer (z.B. ORD-<nummer>) "
                 "oder Ihren Namen, damit ich es erneut prüfen kann."
             )
 

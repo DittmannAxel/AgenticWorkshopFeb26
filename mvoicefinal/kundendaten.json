@@ -1,0 +1,36 @@
+{
+  "customers": [
+    {
+      "id": "C-1001",
+      "name": "Maria Schmidt",
+      "aliases": ["maria schmidt"]
+    },
+    {
+      "id": "C-1002",
+      "name": "Thomas Müller",
+      "aliases": ["thomas mueller", "thomas müller"]
+    }
+  ],
+  "orders": [
+    {
+      "id": "ORD-5001",
+      "customer_id": "C-1001",
+      "status": "in_transit",
+      "estimated_delivery": "2026-02-05",
+      "delivery_window": "10:00-14:00"
+    },
+    {
+      "id": "ORD-5002",
+      "customer_id": "C-1001",
+      "status": "delivered",
+      "delivered_at": "2026-02-02"
+    },
+    {
+      "id": "ORD-5003",
+      "customer_id": "C-1002",
+      "status": "processing",
+      "estimated_delivery": "2026-02-07"
+    }
+  ]
+}
+

@@ -73,7 +73,7 @@ python main.py --api-key YOUR_API_KEY
 ### Optional: Run a Local Mock Orders API
 
 ```bash
-python -m src.mock_orders_api --port 8083
+python -m src.mock_orders_api --port 8083 --data kundendaten.json
 python main_agent.py --endpoint <url> --use-token-credential --orders-service-url http://localhost:8083
 ```
 	
@@ -96,7 +96,10 @@ VOICE_AGENT_TIMEOUT=30
 VOICE_MAX_CONCURRENT_QUERIES=3
 VOICE_ENABLED=true
 
-# Optional: Order lookup backend (if unset, uses in-memory mock data)
+# Optional: Local customer/order data (if ORDERS_SERVICE_URL is unset)
+KUNDENDATEN_PATH=kundendaten.json
+
+# Optional: Order lookup backend (if set, uses HTTP service instead of the JSON file)
 ORDERS_SERVICE_URL=http://localhost:8083
 ```
 

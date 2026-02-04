@@ -71,7 +71,7 @@ from .pending_task_manager import (
 from .basic_voice_assistant import BasicVoiceAssistant
 
 from .order_agent import OrderAgent
-from .order_backend import MockOrderBackend, HttpOrderBackend
+from .order_backend import JsonFileOrderBackend, HttpOrderBackend
 
 __all__ = [
     # Voice service
@@ -99,6 +99,6 @@ __all__ = [
     # Assistants
     "BasicVoiceAssistant",
     "OrderAgent",
-    "MockOrderBackend",
+    "JsonFileOrderBackend",
     "HttpOrderBackend",
 ]
