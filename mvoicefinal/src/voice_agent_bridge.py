@@ -308,7 +308,8 @@ class VoiceAgentBridge:
         action = await self.agent.decide(text)
 
         if action.type == OrderAgentActionType.PASS_THROUGH:
-            await self.voice_service.request_response()
+            # Server-side VAD already auto-generates a response for general
+            # chat, so no explicit request_response() call is needed here.
             return
 
         if action.type == OrderAgentActionType.ASK_IDENTIFIER and action.say:
@@ -318,7 +319,7 @@ class VoiceAgentBridge:
                 "Sagen Sie ausschließlich diesen Text, nichts hinzufügen:\n"
                 f"{action.say}"
             )
-            await self.voice_service.request_response()
+            await self.voice_service.request_response(interrupt=True)
             return
 
         if action.type in (OrderAgentActionType.LOOKUP, OrderAgentActionType.LIST_ORDERS) and action.lookup:
@@ -330,7 +331,7 @@ class VoiceAgentBridge:
                     "Sagen Sie ausschließlich diesen Text, nichts hinzufügen:\n"
                     f"{action.say}"
                 )
-                await self.voice_service.request_response()
+                await self.voice_service.request_response(interrupt=True)
 
         # Check capacity
         if not self.task_manager.can_accept_task:
