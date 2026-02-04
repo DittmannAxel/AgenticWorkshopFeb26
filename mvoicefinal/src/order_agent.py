@@ -35,7 +35,16 @@ class OrderConversationState:
     last_order_id: Optional[str] = None
 
 
-_ORDER_INTENT_RE = re.compile(r"\b(order|orders|bestellung|bestellungen)\b", re.IGNORECASE)
+_ORDER_INTENT_RE = re.compile(
+    r"\b("
+    r"order|orders|"
+    r"bestellung|bestellungen|bestellen|bestellt|"
+    r"lieferung|lieferstatus|lieferzeit|zustellung|"
+    r"versand|sendung|paket|tracking|"
+    r"status"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 def _maybe_extract_customer_name(text: str) -> Optional[str]:

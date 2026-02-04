@@ -281,35 +281,29 @@ class VoiceAgentBridge:
     
     async def _process_user_transcript(self, text: str) -> None:
         """Process a user transcript and potentially spawn agent task."""
-        # Classify the query
-        result = self.classify_query(text)
-
-        # If the order agent previously asked for an identifier, treat the next user turn
-        # as data lookup even if the utterance is only "ORD-<nummer>" or a plain name.
-        if isinstance(self.agent, OrderAgent) and self.agent.state.awaiting_identifier:
-            result = ClassificationResult(
-                query_type=QueryType.DATA_LOOKUP,
-                confidence=1.0,
-                reason="Awaiting order identifier",
-            )
-        
-        logger.info(
-            f"Query classified as {result.query_type.value} "
-            f"(confidence: {result.confidence:.2f}): {text[:50]}..."
-        )
-        
-        # For non-data queries, let VoiceLive handle response generation.
-        if result.query_type != QueryType.DATA_LOOKUP:
-            await self.voice_service.request_response()
-            return
-
-        # For this demo, we expect an OrderAgent that handles:
-        # - missing identifier → ask user
-        # - identifier present → background lookup → speak result
+        # If we're using the order agent, let it decide first. This ensures that
+        # order-related utterances don't accidentally bypass the lookup flow and
+        # fall back to generic model responses (which can hallucinate).
         if not isinstance(self.agent, OrderAgent):
+            # Classify the query (generic routing)
+            result = self.classify_query(text)
+            logger.info(
+                f"Query classified as {result.query_type.value} "
+                f"(confidence: {result.confidence:.2f}): {text[:50]}..."
+            )
+
+            if result.query_type != QueryType.DATA_LOOKUP:
+                await self.voice_service.request_response()
+                return
+
+            await self.voice_service.add_system_message(
+                'Hinweis: Für diese Demo ist kein generischer Agent konfiguriert. '
+                'Bitte stellen Sie eine Bestellfrage oder konfigurieren Sie einen Backend-Agent.'
+            )
             await self.voice_service.request_response()
             return
 
+        # OrderAgent path
         action = await self.agent.decide(text)
 
         if action.type == OrderAgentActionType.PASS_THROUGH:
@@ -318,7 +312,10 @@ class VoiceAgentBridge:
 
         if action.type == OrderAgentActionType.ASK_IDENTIFIER and action.say:
             await self.voice_service.add_system_message(
-                f'User said: "{text}"\n\nAufgabe: Stellen Sie dem Kunden jetzt genau diese Frage:\n{action.say}'
+                f'User said: "{text}"\n\n'
+                "Aufgabe: Stellen Sie dem Kunden genau diese Frage. "
+                "Sagen Sie ausschließlich diesen Text, nichts hinzufügen:\n"
+                f"{action.say}"
             )
             await self.voice_service.request_response()
             return
@@ -327,7 +324,10 @@ class VoiceAgentBridge:
             # Immediate acknowledgement to keep the voice conversation snappy.
             if action.say:
                 await self.voice_service.add_system_message(
-                    f'User said: "{text}"\n\nAufgabe: Sagen Sie dem Kunden kurz:\n{action.say}'
+                    f'User said: "{text}"\n\n'
+                    "Aufgabe: Sagen Sie dem Kunden genau diesen Satz. "
+                    "Sagen Sie ausschließlich diesen Text, nichts hinzufügen:\n"
+                    f"{action.say}"
                 )
                 await self.voice_service.request_response()
 
@@ -406,6 +406,9 @@ class VoiceAgentBridge:
         await self.voice_service.add_system_message(
             "Zusatzkontext:\n"
             f"{context}\n\n"
+            "WICHTIG: Verwenden Sie ausschließlich Fakten aus dem Zusatzkontext. "
+            "Erfinden Sie keine Produkte, Artikel oder Details. "
+            "Wenn eine Information fehlt, sagen Sie: 'Dazu habe ich keine Information.'\n\n"
             "Aufgabe: Erklären Sie dem Kunden kurz die Informationen aus dem Zusatzkontext "
             "und fragen Sie am Ende knapp nach, ob Sie noch weiterhelfen können."
         )
@@ -434,7 +437,9 @@ class VoiceAgentBridge:
             context = self.config.error_message.format(query=query[:50])
         
         await self.voice_service.add_system_message(
-            f"{context}\n\nAufgabe: Entschuldigen Sie sich kurz und bitten Sie den Kunden, "
+            f"{context}\n\n"
+            "WICHTIG: Keine Vermutungen anstellen. Keine Details erfinden.\n\n"
+            "Aufgabe: Entschuldigen Sie sich kurz und bitten Sie den Kunden, "
             "die Bestellnummer oder seinen Namen noch einmal zu nennen."
         )
         await self.voice_service.request_response(interrupt=True)
@@ -465,6 +470,10 @@ class VoiceAgentBridge:
             eta = data.get("estimated_delivery")
             window = data.get("delivery_window")
             parts = [f"Bestellung {order_id}: Status {status}."]
+            items = data.get("items")
+            if isinstance(items, list) and items:
+                # Keep this short for voice; user can ask for details.
+                parts.append(f"Artikel: {items[0]}.")
             if eta:
                 if window:
                     parts.append(f"Voraussichtliche Lieferung {eta} zwischen {window}.")
